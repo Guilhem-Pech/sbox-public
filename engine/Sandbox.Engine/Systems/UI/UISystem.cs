@@ -282,13 +282,11 @@ internal class UISystem
 	{
 		var scene = Game.ActiveScene;
 		if ( !scene.IsValid() ) return;
-
-		var rootPanels = scene.GetAllComponents<WorldPanel>();
 		var worldInputs = scene.GetAllComponents<WorldInput>();
 
 		foreach ( var worldInput in worldInputs )
 		{
-			worldInput.WorldPanelInput.Tick( rootPanels.Select( x => x.GetPanel() as RootPanel ), true );
+			worldInput.WorldPanelInput.Tick(RootPanels.Where( x => x.IsWorldPanel ), true );
 		}
 	}
 
