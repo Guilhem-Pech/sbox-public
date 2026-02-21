@@ -337,7 +337,7 @@ internal class UISystem
 
 		foreach ( var worldInput in worldInputs )
 		{
-			worldInput.WorldPanelInput.Tick(RootPanels.Where( x => x.IsWorldPanel ), true );
+			worldInput.WorldPanelInput.Tick( RootPanels.Where( x => x.IsWorldPanel ), true );
 		}
 	}
 
