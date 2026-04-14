@@ -39,7 +39,7 @@ public class InvokeBlock : InspectorWidget
 
 		var invokeType = _invokeType.GetValue<Doo.InvokeType>();
 		var targetComponent = _targetComponent.GetValue<Doo.TargetComponent>();
-		var hasComponent = targetComponent.GetComponentType() != null;
+		var hasComponent = targetComponent?.GetComponentType() != null;
 
 		var method = _memberProperty.GetCustomizable();
 		method.SetDisplayName( "Method" );
