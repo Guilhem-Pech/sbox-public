@@ -35,9 +35,9 @@ partial class Session
 		if ( parent is null )
 		{
 			availableTracks = Project.RootTracks.OfType<T>();
-			
+
 		}
-		else if( GetTrack( parent ) is { } parentTrack )
+		else if ( GetTrack( parent ) is { } parentTrack )
 		{
 			availableTracks = parentTrack.Children.OfType<T>();
 		}
@@ -129,9 +129,9 @@ partial class Session
 			}
 		}
 
-		var track = (ProjectReferenceTrack<GameObject>)Project.AddReferenceTrack( go.Name, typeof(GameObject), parentTrack );
+		var track = (ProjectReferenceTrack<GameObject>)Project.AddReferenceTrack( go.Name, typeof( GameObject ), parentTrack );
 
-		track.ReferenceId = go.Id;
+		track.Metadata = new TrackMetadata( go.Id );
 
 		Binder.Get( track ).Bind( go );
 
@@ -163,7 +163,7 @@ partial class Session
 		var goTrack = GetOrCreateTrack( cmp.GameObject );
 		var track = Project.AddReferenceTrack( cmp.GetType().Name, cmp.GetType(), goTrack );
 
-		track.ReferenceId = cmp.Id;
+		track.Metadata = new TrackMetadata( cmp.Id );
 
 		Binder.Get( track ).Bind( cmp );
 
@@ -186,6 +186,18 @@ partial class Session
 		// Nest property tracks inside the containing Component's track
 
 		return GetOrCreateTrack( GetOrCreateTrack( cmp ), propertyPath );
+	}
+
+	public IProjectTrack GetOrCreateTrack( SandboxToolExtensions.PropertyPath path )
+	{
+		var fullName = path.FullName;
+
+		return path.Targets.FirstOrDefault() switch
+		{
+			GameObject go => GetOrCreateTrack( go, fullName ),
+			Component cmp => GetOrCreateTrack( cmp, fullName ),
+			_ => throw new InvalidOperationException( "Expected GameObject or Component property target." )
+		};
 	}
 
 	public ProjectSequenceTrack GetOrCreateTrack( MovieResource resource )
@@ -222,25 +234,29 @@ partial class Session
 	/// <summary>
 	/// Create a track hierarchy matching the given <paramref name="preset"/>, rooted on <paramref name="rootTrack"/>.
 	/// </summary>
-	public void LoadPreset( IProjectTrack rootTrack, ITrackTarget rootTarget, TrackPresetNode preset )
+	public IEnumerable<IProjectTrack> LoadPreset( IProjectTrack rootTrack, ITrackTarget rootTarget, TrackPresetNode preset )
 	{
 		if ( preset.AllChildren )
 		{
 			foreach ( var (name, _, _) in TrackProperty.GetAll( rootTarget ) )
 			{
-				GetOrCreateTrack( rootTrack, name );
+				yield return GetOrCreateTrack( rootTrack, name );
 			}
 
-			return;
+			yield break;
 		}
 
 		foreach ( var childPreset in preset.Children )
 		{
-			if ( GetOrCreatePresetTrackCore( rootTrack, rootTarget, childPreset ) is { } childTrack )
-			{
-				var childTarget = Binder.Get( childTrack );
+			if ( GetOrCreatePresetTrackCore( rootTrack, rootTarget, childPreset ) is not { } childTrack ) continue;
 
-				LoadPreset( childTrack, childTarget, childPreset );
+			yield return childTrack;
+
+			var childTarget = Binder.Get( childTrack );
+
+			foreach ( var createdChildTrack in LoadPreset( childTrack, childTarget, childPreset ) )
+			{
+				yield return createdChildTrack;
 			}
 		}
 	}
@@ -287,7 +303,7 @@ partial class Session
 
 			return child is null ? null : GetOrCreateTrack( child );
 		}
-			
+
 		if ( childPreset.PropertyType.IsAssignableTo( typeof( Component ) ) )
 		{
 			var component = rootGameObject.Components.FirstOrDefault( childPreset.PropertyType.IsInstanceOfType );
@@ -344,7 +360,9 @@ partial class Session
 	{
 		// Negative deltas aren't supported :(
 
-		var dt = Math.Min( (float)deltaTime.Absolute.TotalSeconds, 1f );
+		deltaTime = deltaTime.Absolute;
+
+		var dt = (float)deltaTime.Clamp( (MovieTime.Zero, MovieTime.FromSeconds( 0.25 )) ).TotalSeconds;
 
 		Time.Delta = dt;
 
@@ -377,6 +395,7 @@ partial class Session
 	private void UpdateAnimationPlaybackRate( SkinnedModelRenderer renderer, float dt )
 	{
 		if ( renderer.SceneModel is not { } model ) return;
+		if ( renderer.BoneMergeTarget.IsValid() ) return;
 
 		if ( dt > 0f && IsEditorScene )
 		{

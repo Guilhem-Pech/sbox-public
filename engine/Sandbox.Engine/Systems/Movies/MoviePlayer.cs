@@ -1,6 +1,5 @@
 ﻿using Sandbox.MovieMaker.Properties;
-using System.Diagnostics;
-using System.Text.Json.Serialization;
+using Sandbox.Utility;
 
 namespace Sandbox.MovieMaker;
 
@@ -11,20 +10,19 @@ namespace Sandbox.MovieMaker;
 /// </summary>
 [Icon( "live_tv" )]
 [Category( "Movie Maker" )]
-public sealed class MoviePlayer : Component
+public sealed partial class MoviePlayer : Component
 {
 	private MovieTime _position;
 	private bool _isPlaying;
 
 	private IMovieResource? _source;
 	private IMovieClip? _clip;
-	private TrackBinder? _binder;
 
 	/// <summary>
 	/// Maps <see cref="ITrack"/>s to game objects, components, and property <see cref="ITrackTarget"/>s in the scene.
 	/// </summary>
 	[Property, Hide]
-	public TrackBinder Binder => _binder ??= new TrackBinder( Scene );
+	public TrackBinder Binder => field ??= new TrackBinder( Scene );
 
 	/// <summary>
 	/// Contains a <see cref="IMovieClip"/> to play. Can be a <see cref="MovieResource"/> or <see cref="EmbeddedMovieResource"/>.
@@ -99,12 +97,38 @@ public sealed class MoviePlayer : Component
 	/// <summary>
 	/// Play the specified movie from the start.
 	/// </summary>
+	/// <param name="movie">Movie resource to play.</param>
 	public void Play( MovieResource movie )
 	{
 		_position = 0;
 		_isPlaying = true;
 
-		Resource = movie;
+		_clip = null;
+		_source = movie;
+
+		UpdatePosition();
+	}
+
+	/// <summary>
+	/// Play the specified clip from the start.
+	/// </summary>
+	/// <param name="clip">Movie clip to play.</param>
+	public void Play( IMovieClip clip )
+	{
+		_position = 0;
+		_isPlaying = true;
+
+		_source = null;
+		_clip = clip;
+
+		UpdatePosition();
+	}
+
+	protected override void OnDestroy()
+	{
+		// Destroy any objects created for playback
+
+		UpdateTargets( null );
 	}
 
 	/// <summary>
@@ -114,6 +138,15 @@ public sealed class MoviePlayer : Component
 	{
 		if ( !Enabled ) return;
 
+		// Don't try to do anything while deserializing
+
+		if ( Flags.HasFlag( ComponentFlags.Deserializing ) ) return;
+		if ( GameObject.Flags.HasFlag( GameObjectFlags.Deserializing ) ) return;
+
+		// Create / destroy target objects / components
+
+		UpdateTargets( CreateTargets ? Clip : null );
+
 		if ( Clip is not { } clip ) return;
 
 		foreach ( var renderer in Binder.GetComponents<SkinnedModelRenderer>( clip ) )
@@ -121,7 +154,10 @@ public sealed class MoviePlayer : Component
 			MovieBoneAnimatorSystem.Current?.ClearBones( renderer );
 		}
 
-		clip.Update( _position, Binder );
+		using ( BeginApplyFrameInternal() )
+		{
+			clip.Update( _position, Binder );
+		}
 
 		if ( IsPlaying )
 		{
@@ -131,6 +167,25 @@ public sealed class MoviePlayer : Component
 		{
 			StopControllingRigidBodies();
 		}
+	}
+
+	internal IDisposable BeginApplyFrameInternal()
+	{
+		// TODO: move ClearBones / UpdateAnimationPlaybackRate etc here, avoid duplication in editor code
+
+		var sceneScope = Scene.Push();
+
+		// We need to batch any property changes in case we're setting Enabled on multiple
+		// components / game objects. This batch will make sure OnEnabled gets called in the
+		// correct order.
+
+		var batchScope = CallbackBatch.Batch();
+
+		return new DisposeAction( () =>
+		{
+			batchScope?.Dispose();
+			sceneScope?.Dispose();
+		} );
 	}
 
 	protected override void OnEnabled()
@@ -219,11 +274,13 @@ public sealed class MoviePlayer : Component
 	protected override void OnDisabled()
 	{
 		StopControllingRigidBodies();
+		UpdateTargets( null );
 	}
 
 	private void UpdateAnimationPlaybackRate( SkinnedModelRenderer renderer )
 	{
 		if ( renderer.SceneModel is not { } model ) return;
+		if ( renderer.BoneMergeTarget.IsValid() ) return;
 
 		// We're assuming SkinnedModelRenderer.PlaybackRate persists even if we change SceneModel.PlaybackRate,
 		// so we don't stomp relative playback rates

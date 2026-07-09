@@ -12,6 +12,7 @@ public class AssetInspector : InspectorWidget
 	public Asset Asset { get; set; }
 	public Asset[] Assets { get; set; }
 	public Action OnSave { get; set; }
+	public Action OnReset { get; set; }
 
 	ToolBar ToolBar;
 
@@ -149,10 +150,11 @@ public class AssetInspector : InspectorWidget
 
 	protected override bool OnInspectorClose( object newObj = null )
 	{
-		if ( !Asset.TryLoadResource<GameResource>( out var gameResource ) || !gameResource.HasUnsavedChanges )
-		{
+		var generic = !Asset.TryLoadResource<GameResource>( out var gameResource ) || !gameResource.HasUnsavedChanges;
+		if ( generic && !Asset.HasUnsavedChanges )
 			return true;
-		}
+		if ( generic && OnSave is null && OnReset is null )
+			return true;
 
 		var popup = new PopupDialogWidget( "💾" );
 		popup.FixedWidth = 462;
@@ -165,7 +167,10 @@ public class AssetInspector : InspectorWidget
 		{
 			Clicked = () =>
 			{
-				SaveAsset( Asset, gameResource );
+				if ( generic )
+					OnSave?.Invoke();
+				else
+					SaveAsset( Asset, gameResource );
 				popup.Destroy();
 				// After we are done with the popup, retrigger the inspector change since we previously blocked it.
 				EditorUtility.InspectorObject = newObj;
@@ -176,7 +181,10 @@ public class AssetInspector : InspectorWidget
 		{
 			Clicked = () =>
 			{
-				ResetAsset( Asset, gameResource );
+				if ( generic )
+					OnReset?.Invoke();
+				else
+					ResetAsset( Asset, gameResource );
 				popup.Destroy();
 				EditorUtility.InspectorObject = newObj;
 			}
@@ -228,6 +236,9 @@ public class AssetInspector : InspectorWidget
 				{
 					SaveOption.Bind( "Enabled" ).ReadOnly().From( () => gameResource.HasUnsavedChanges, null );
 				}
+
+				// Set the save action here, otherwise clicking Save falls through to the unused OnSave callback and nothing is actually saved
+				SaveOption.Triggered = saveAction;
 
 				if ( custom is IAssetInspector customInspector )
 				{
@@ -332,21 +343,24 @@ public class AssetInspector : InspectorWidget
 
 					var so = gameResource.GetSerialized();
 
+					sheet.AddObject( so, filter: FilterProperties );
+
+					// Only flag the resource dirty when its serialized content genuinely changes
+					var cleanStateHash = gameResource.Serialize().ToJsonString().FastHash();
+
 					so.OnPropertyChanged += x =>
 					{
 						if ( isReadOnly ) return;
+						if ( gameResource.HasUnsavedChanges ) return;
+
+						var hash = gameResource.Serialize().ToJsonString().FastHash();
+						if ( hash == cleanStateHash ) return;
+						cleanStateHash = hash;
 
 						// TODO: this inspector should have its own undo system for edits to this
 						gameResource.StateHasChanged();
 					};
 
-					if ( isReadOnly )
-					{
-						//todo
-						//so = so.AsReadOnly();
-					}
-
-					sheet.AddObject( so, filter: FilterProperties );
 					ContentLayout.Add( sheet );
 					ContentLayout.AddStretchCell();
 				}
@@ -391,11 +405,17 @@ public class AssetInspector : InspectorWidget
 	}
 
 	/// <summary>
-	/// Doesn't handle IAssetInspector or BaseResourceEditor
+	/// Builds the editing UI when multiple assets are selected. Game resources are edited together via a
+	/// <see cref="MultiSerializedObject"/>; raw assets whose settings live in metadata (e.g. vsnd, jpg) are
+	/// handled by their <see cref="IAssetInspector"/> if every selection shares the same type.
+	/// Doesn't handle BaseResourceEditor.
 	/// </summary>
 	private void CreateMultiContentUI( SerializedObject target )
 	{
 		CreateContentLayout();
+
+		if ( TryCreateMultiAssetInspector() )
+			return;
 
 		MultiSerializedObject mso = new MultiSerializedObject();
 
@@ -425,6 +445,53 @@ public class AssetInspector : InspectorWidget
 		SaveOption.Triggered = saveAction;
 
 		Scroller?.Canvas?.Parent?.Update();
+	}
+
+	/// <summary>
+	/// If every selected asset is the same type and that type has a custom <see cref="IAssetInspector"/>,
+	/// create it once and hand it the whole selection via <see cref="IAssetInspector.SetAssets"/>. Returns
+	/// false (leaving the caller to fall back to the generic path) for mixed selections, game resources, or
+	/// types without a custom inspector.
+	/// </summary>
+	private bool TryCreateMultiAssetInspector()
+	{
+		if ( Assets is null || Assets.Length < 2 )
+			return false;
+
+		// Only when every selected asset is the exact same type.
+		if ( Assets.Select( x => x.AssetType ).Distinct().Count() != 1 )
+			return false;
+
+		// Game resources have their own MultiSerializedObject path below.
+		if ( Assets.Any( x => x.TryLoadResource<GameResource>( out _ ) ) )
+			return false;
+
+		var assetType = $"asset:{Assets[0].AssetType.FileExtension.ToLower()}";
+		var editor = CanEditAttribute.CreateEditorFor( assetType );
+
+		// Only use the type editor if it genuinely supports multi-select - otherwise editing it would
+		// silently affect just one asset while the header says "N Assets", which is confusing.
+		if ( editor is not IAssetInspector inspector )
+		{
+			editor?.Destroy();
+			return false;
+		}
+
+		inspector.SetInspector( this );
+
+		if ( !inspector.SetAssets( Assets ) )
+		{
+			editor?.Destroy();
+			return false;
+		}
+
+		if ( editor.IsValid() )
+			ContentLayout.Add( editor );
+
+		ContentLayout.AddStretchCell();
+		Scroller?.Canvas?.Parent?.Update();
+
+		return true;
 	}
 
 	public void SaveAsset( Asset target, Sandbox.GameResource assetObject )
@@ -524,10 +591,36 @@ public class AssetInspector : InspectorWidget
 		SaveOption.Bind( "Enabled" ).ReadOnly().From( () => { return Asset.HasUnsavedChanges; }, null );
 	}
 
+	/// <summary>
+	/// Implemented by a widget that edits a particular asset type (matched via <see cref="CanEditAttribute"/>,
+	/// e.g. <c>[CanEdit( "asset:vsnd" )]</c>). The hosting <see cref="AssetInspector"/> creates the widget and
+	/// feeds it the current selection through these calls.
+	/// </summary>
 	public interface IAssetInspector
 	{
+		/// <summary>
+		/// Called when a single asset is selected. Bind your editing UI to it.
+		/// </summary>
 		public void SetAsset( Asset asset );
+
+		/// <summary>
+		/// Called instead of <see cref="SetAsset"/> when multiple assets of the same type are selected.
+		/// Return true if this inspector applied the whole selection (i.e. it supports multi-select editing).
+		/// The default returns false, meaning "I only handle a single asset" - the caller then shows the
+		/// header-only multi view rather than silently editing just the first asset.
+		/// </summary>
+		public bool SetAssets( Asset[] assets ) => false;
+
+		/// <summary>
+		/// Gives the inspector the shared <see cref="AssetPreview"/> for the selected asset, so it can drive
+		/// or react to the preview. Optional - the default does nothing.
+		/// </summary>
 		public void SetAssetPreview( AssetPreview preview ) { }
+
+		/// <summary>
+		/// Gives the inspector a reference back to the hosting <see cref="AssetInspector"/>, e.g. to toggle its
+		/// Save option or read its context. Optional - the default does nothing.
+		/// </summary>
 		public void SetInspector( AssetInspector inspector ) { }
 	}
 

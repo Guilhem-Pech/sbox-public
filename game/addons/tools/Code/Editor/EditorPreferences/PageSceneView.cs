@@ -12,6 +12,7 @@ internal class PageSceneView : Widget
 		var sheet = new ControlSheet();
 
 		sheet.AddProperty( () => EditorPreferences.CameraFieldOfView );
+		sheet.AddProperty( () => EditorPreferences.CameraBackgroundColor );
 
 		sheet.AddProperty( () => EditorPreferences.CameraZNear );
 		sheet.AddProperty( () => EditorPreferences.CameraZFar );
@@ -33,8 +34,21 @@ internal class PageSceneView : Widget
 
 		sheet.AddProperty( () => EditorPreferences.BackfaceSelection );
 		sheet.AddProperty( () => EditorPreferences.BoundsPlacement );
+		sheet.AddProperty( () => EditorPreferences.PasteAtCursor );
 
 		Layout.Add( sheet );
+
+		Layout.AddSpacingCell( 16 );
+		Layout.Add( new Label.Subtitle( "Gizmo Handles" ) );
+
+		var gizmoSheet = new ControlSheet();
+
+		gizmoSheet.AddProperty( () => EditorPreferences.GizmoScale );
+		gizmoSheet.AddProperty( () => EditorPreferences.GizmoRenderDistance );
+		gizmoSheet.AddProperty( () => EditorPreferences.GizmoDepthTest );
+		gizmoSheet.AddProperty( () => EditorPreferences.WorldSpaceGizmos );
+
+		Layout.Add( gizmoSheet );
 		Layout.AddStretchCell();
 	}
 }

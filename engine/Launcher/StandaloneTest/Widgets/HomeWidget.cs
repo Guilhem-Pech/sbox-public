@@ -74,8 +74,8 @@ public class HomeWidget : Widget
 			Sort = _sort;
 
 			{
-				var search = menuRow.Add( new LineEdit() { PlaceholderText = "⌕  Search" }, 2 );
-				search.SetStyles( "border-radius: 3px;" );
+				var search = menuRow.Add( new LineEdit() { PlaceholderText = "⌕  Search" }, 1 );
+				search.SetStyles( $"border: 1px solid {Theme.ButtonBackground.Hex};" );
 				search.TextChanged += _ =>
 				{
 					Filter = search.Value;
@@ -84,7 +84,6 @@ public class HomeWidget : Widget
 				search.Blur();
 			}
 
-			menuRow.AddStretchCell( 1 );
 			//menuRow.Add( new IconButton( "cloud_download" )
 			//{
 			//	OnClick = ProjectDownload.OpenWindow,
@@ -130,6 +129,8 @@ public class HomeWidget : Widget
 			RefreshLocalProjects();
 		}
 
+		// Fill the taskbar jump list so recent projects are there before you open anything.
+		TaskbarJumpList.Refresh();
 	}
 
 	private void RefreshLocalProjects()
@@ -390,6 +391,9 @@ public class HomeWidget : Widget
 
 	public void OpenProject( Project project, string args = null )
 	{
+		// LastOpened's already been bumped and saved, so this project is now top of the jump list.
+		TaskbarJumpList.Refresh();
+
 		ProcessStartInfo info = new ProcessStartInfo( "sbox-dev.exe", $"{Environment.CommandLine} -project \"{project.ConfigFilePath}\" {args ?? ""}" );
 		info.UseShellExecute = true;
 		info.CreateNoWindow = true;

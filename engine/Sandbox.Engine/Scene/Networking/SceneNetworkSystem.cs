@@ -121,7 +121,7 @@ public partial class SceneNetworkSystem : GameNetworkSystem
 				continue;
 
 			PendingSceneLoads[c.Id] = loadMsg.Id;
-			c.SendRawMessage( msg );
+			c.SendStream( msg );
 			c.State = Connection.ChannelState.MountVPKs;
 		}
 
@@ -297,7 +297,7 @@ public partial class SceneNetworkSystem : GameNetworkSystem
 		bs.Write( InternalMessageType.Packed );
 
 		Networking.System.Serialize( output, ref bs );
-		connection.SendRawMessage( bs );
+		connection.SendStream( bs );
 
 		bs.Dispose();
 	}
@@ -307,7 +307,9 @@ public partial class SceneNetworkSystem : GameNetworkSystem
 	/// </summary>
 	private async Task OnLoadSceneMsg( LoadSceneBeginMsg msg, Connection connection, Guid msgId )
 	{
-		if ( !Game.IsEditor && msg.ShowLoadingScreen )
+		// Always show the loading screen on clients when the host changes scene,
+		// so they see feedback immediately instead of a frozen frame.
+		if ( !Game.IsEditor )
 		{
 			LoadingScreen.IsVisible = true;
 			LoadingScreen.Title = "Loading Scene";
@@ -370,7 +372,7 @@ public partial class SceneNetworkSystem : GameNetworkSystem
 		MountedVPKs = await MountMaps( msg.MountedVPKs );
 	}
 
-	private static readonly GameObject.SerializeOptions _snapshotSerializeOptions = new() { SceneForNetwork = true };
+	private static readonly GameObject.SerializeOptions _snapshotSerializeOptions = new() { SceneForNetwork = true, SkipNulls = true };
 
 	/// <summary>
 	/// A client has joined and wants a snapshot of the world.
@@ -527,6 +529,8 @@ public partial class SceneNetworkSystem : GameNetworkSystem
 		} );
 	}
 
+	private static readonly GameObject.DeserializeOptions networkDeserializeOptionsCreate = new() { ClearAbsentFields = true };
+
 	/// <summary>
 	/// We have received a snapshot of the world.
 	/// </summary>
@@ -554,7 +558,7 @@ public partial class SceneNetworkSystem : GameNetworkSystem
 			if ( !string.IsNullOrWhiteSpace( msg.SceneData ) )
 			{
 				var sceneData = JsonNode.Parse( msg.SceneData ).AsObject();
-				Game.ActiveScene.Deserialize( sceneData );
+				Game.ActiveScene.Deserialize( sceneData, networkDeserializeOptionsCreate );
 			}
 
 			var createdNetworkObjects = new List<Tuple<GameObject, ObjectCreateMsg>>();
@@ -565,7 +569,7 @@ public partial class SceneNetworkSystem : GameNetworkSystem
 					continue;
 
 				var go = new GameObject();
-				go.Deserialize( JsonNode.Parse( oc.JsonData ).AsObject() );
+				go.Deserialize( JsonNode.Parse( oc.JsonData ).AsObject(), networkDeserializeOptionsCreate );
 				createdNetworkObjects.Add( new( go, oc ) );
 			}
 
@@ -593,6 +597,8 @@ public partial class SceneNetworkSystem : GameNetworkSystem
 
 		MountedVPKs?.Dispose();
 		MountedVPKs = null;
+
+		LoadingScreen.Title = null;
 
 		// Wait for loading to finish
 		if ( Game.ActiveScene is not null )
@@ -687,6 +693,8 @@ public partial class SceneNetworkSystem : GameNetworkSystem
 
 	public override void OnJoined( Connection client )
 	{
+		Platform.Chat.BroadcastText( $"👋 {client.Name} has joined the game" );
+
 		Action queue = default;
 
 		foreach ( var c in Game.ActiveScene.GetAll<Component.INetworkListener>() )
@@ -722,6 +730,8 @@ public partial class SceneNetworkSystem : GameNetworkSystem
 
 			if ( Networking.IsHost )
 			{
+				Platform.Chat.BroadcastText( $"👋 {client.Name} left the game" );
+
 				Action queue = default;
 
 				foreach ( var c in Game.ActiveScene.GetAll<Component.INetworkListener>() )
@@ -884,6 +894,10 @@ public partial class SceneNetworkSystem : GameNetworkSystem
 
 	private void OnObjectRefreshDescendant( ObjectRefreshDescendantMsg message, Connection source )
 	{
+		// Is this a request from someone? If so, check if they can refresh objects.
+		if ( source is not null && !source.CanRefreshObjects )
+			return;
+
 		var scene = Game.ActiveScene;
 		if ( !scene.IsValid() )
 			return;
@@ -921,13 +935,19 @@ public partial class SceneNetworkSystem : GameNetworkSystem
 			gameObject.SetParentFromNetwork( parentObject );
 		}
 
+		if ( source is not null && !source.IsHost )
+		{
+			gameObject.PreserveFromHostSyncMembers( gameObjectJson );
+		}
+
 		using ( var _ = CallbackBatch.Batch() )
 		using ( BlobDataSerializer.LoadFromMemory( message.BlobData ) )
 		{
 			gameObject?.Deserialize( gameObjectJson, new GameObject.DeserializeOptions
 			{
 				IsNetworkRefresh = true,
-				IsRefreshing = true
+				IsRefreshing = true,
+				ClearAbsentFields = true
 			} );
 		}
 
@@ -936,6 +956,10 @@ public partial class SceneNetworkSystem : GameNetworkSystem
 
 	private void OnObjectRefreshComponent( ObjectRefreshComponentMsg message, Connection source )
 	{
+		// Is this a request from someone? If so, check if they can refresh objects.
+		if ( source is not null && !source.CanRefreshObjects )
+			return;
+
 		var scene = Game.ActiveScene;
 		if ( !scene.IsValid() )
 			return;
@@ -990,10 +1014,16 @@ public partial class SceneNetworkSystem : GameNetworkSystem
 			return;
 		}
 
-		using ( var _ = CallbackBatch.Batch() )
+		if ( source is not null && !source.IsHost )
+		{
+			component.PreserveFromHostSyncMembers( componentJson );
+		}
+
+		using ( CallbackBatch.Batch() )
 		using ( BlobDataSerializer.LoadFromMemory( message.BlobData ) )
 		{
-			component?.Deserialize( componentJson );
+			component?.DeserializeInternal( componentJson, true );
+			component?.PostDeserialize();
 		}
 
 		root._net.UpdateFromRefresh( source, message.TableData, message.Snapshot );
@@ -1055,10 +1085,14 @@ public partial class SceneNetworkSystem : GameNetworkSystem
 		{
 			foreach ( var msg in message.CreateMsgs )
 			{
+				// Don't let clients claim ownership or creation on behalf of other connections
+				if ( source is not null && !source.IsHost && (msg.Owner != source.Id || msg.Creator != source.Id) )
+					continue;
+
 				using ( BlobDataSerializer.LoadFromMemory( msg.BlobData ) )
 				{
 					var go = new GameObject();
-					go.Deserialize( JsonNode.Parse( msg.JsonData ).AsObject() );
+					go.Deserialize( JsonNode.Parse( msg.JsonData ).AsObject(), networkDeserializeOptionsCreate );
 					go.NetworkSpawnRemote( msg );
 				}
 			}
@@ -1079,12 +1113,16 @@ public partial class SceneNetworkSystem : GameNetworkSystem
 		if ( source is not null && !source.CanSpawnObjects )
 			return;
 
+		// Don't let clients claim ownership or creation on behalf of other connections
+		if ( source is not null && !source.IsHost && (message.Owner != source.Id || message.Creator != source.Id) )
+			return;
+
 		var go = new GameObject();
 
 		using ( CallbackBatch.Batch() )
 		using ( BlobDataSerializer.LoadFromMemory( message.BlobData ) )
 		{
-			go.Deserialize( JsonNode.Parse( message.JsonData ).AsObject() );
+			go.Deserialize( JsonNode.Parse( message.JsonData ).AsObject(), networkDeserializeOptionsCreate );
 			go.NetworkSpawnRemote( message );
 		}
 	}
@@ -1130,7 +1168,7 @@ public partial class SceneNetworkSystem : GameNetworkSystem
 		if ( !source.IsHost && source.Id != obj._net.Owner )
 			return;
 
-		obj._net.OnNetworkTableMessage( message );
+		obj._net.OnNetworkTableMessage( message, source );
 	}
 
 	private void OnObjectDetach( ObjectDetachMsg message, Connection source, Guid msgId )
@@ -1154,7 +1192,7 @@ public partial class SceneNetworkSystem : GameNetworkSystem
 
 		if ( !source.IsHost )
 		{
-			Log.Warning( $"OnObjectDetach: Only the host can detach networked objects. {source.DisplayName} attempted to detach {obj.Name}." );
+			Log.Warning( $"OnObjectDetach: Only the host can detach networked objects. {source.Name} attempted to detach {obj.Name}." );
 			return;
 		}
 
@@ -1186,7 +1224,7 @@ public partial class SceneNetworkSystem : GameNetworkSystem
 			// If we're unowned and the source is not the host, we can't destroy.
 			if ( !source.IsHost )
 			{
-				Log.Warning( $"ObjectDestroy: Only the host can destroy unowned networked objects. {source.DisplayName} attempted to destroy {obj.Name}." );
+				Log.Warning( $"ObjectDestroy: Only the host can destroy unowned networked objects. {source.Name} attempted to destroy {obj.Name}." );
 				return;
 			}
 		}
@@ -1195,14 +1233,14 @@ public partial class SceneNetworkSystem : GameNetworkSystem
 			// If the source is not the owner and not the host, we can't destroy.
 			if ( !source.IsHost && obj._net.Owner != source.Id )
 			{
-				Log.Warning( $"ObjectDestroy: {source.DisplayName} attempted to destroy {obj.Name} but is not the owner. Owner is {obj._net.Owner}." );
+				Log.Warning( $"ObjectDestroy: {source.Name} attempted to destroy {obj.Name} but is not the owner. Owner is {obj._net.Owner}." );
 				return;
 			}
 
 			// If the source is the owner but not the host, check if they have permission to destroy.
 			if ( !source.IsHost && !source.CanDestroyObjects )
 			{
-				Log.Warning( $"ObjectDestroy: {source.DisplayName} attempted to destroy {obj.Name} but does not have CanDestroyObjects permission enabled." );
+				Log.Warning( $"ObjectDestroy: {source.Name} attempted to destroy {obj.Name} but does not have CanDestroyObjects permission enabled." );
 				return;
 			}
 		}

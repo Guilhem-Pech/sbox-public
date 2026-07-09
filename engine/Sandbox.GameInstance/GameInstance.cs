@@ -1,3 +1,4 @@
+using Sandbox.Engine;
 using Sandbox.Internal;
 using Sandbox.Menu;
 using Sandbox.Modals;
@@ -114,6 +115,8 @@ internal class GameInstance : IGameInstance
 		if ( activePackage != null && !Application.IsStandalone )
 		{
 			Game.Language?.Shutdown();
+			Game.Language = null;
+
 			FileSystem.Mounted?.UnMount( activePackage.FileSystem );
 
 			activePackage = null;
@@ -126,13 +129,23 @@ internal class GameInstance : IGameInstance
 
 		GameInstanceDll.Current.Shutdown( this );
 
-		// If we were running a benchmark, leave the game
-		if ( Application.IsBenchmark )
+		// If we were running a benchmark, load the next package or finish
+		if ( Application.IsBenchmark || BenchmarkOrchestrator.IsRunning )
 		{
-			if ( !Bootstrap.TryLoadNextBenchmarkPackage() )
+			if ( !BenchmarkOrchestrator.TryLoadNextPackage() )
 			{
-				Console.WriteLine( "Quitting" );
-				ConVarSystem.Run( "quit" );
+				if ( BenchmarkOrchestrator.IsRunning )
+				{
+					BenchmarkOrchestrator.IsRunning = false;
+					BenchmarkOrchestrator.RestoreSettings();
+					Game.Overlay.ShowBenchmarkResults( BenchmarkOrchestrator.LastBatchId, BenchmarkOrchestrator.Summaries );
+				}
+				else
+				{
+					BenchmarkOrchestrator.RestoreSettings();
+					Console.WriteLine( "Quitting" );
+					ConVarSystem.Run( "quit" );
+				}
 			}
 		}
 
@@ -149,6 +162,7 @@ internal class GameInstance : IGameInstance
 		Log.Trace( $"LoadAsync: {Ident} (dev:{IsDeveloperHost})" );
 		SentrySdk.AddBreadcrumb( $"Loading Game {Ident}", "gameinstance.load" );
 
+		LoadingScreen.Title = "Fetching Package Info";
 		_package = await Package.FetchAsync( Ident, false );
 
 		if ( !IsDeveloperHost )
@@ -164,22 +178,30 @@ internal class GameInstance : IGameInstance
 		Application.GamePackage = _package;
 		Application.ExceptionCount = default;
 
+		EngineFileSystem.ProjectSettings = new AggregateFileSystem();
+		Game.Language = new LanguageContainer();
+
 		//
 		// When joining a server, we don't mind if the package is missing or bullshit
 		// because they might have some assemblies that run the game.
 		//
 		if ( Package is null && IsDeveloperHost )
 		{
-			EngineFileSystem.ProjectSettings = new AggregateFileSystem();
 			LoadProjectSettings();
 			SetupFileWatch();
 			return true;
+		}
+
+		if ( Package.TypeName != "game" && !Application.IsEditor )
+		{
+			throw new Exception( $"Package {Ident} is not a game" );
 		}
 
 		var achievementTask = _package.GetAchievements();
 
 		Log.Trace( $"Install Async {Package.Title}" );
 		LoadingScreen.Title = $"Installing {Package.Title}";
+		LoadingScreen.Media = Package.LoadingScreen.MediaUrl;
 
 		var identWithVersion = Package.FullIdent;
 
@@ -242,6 +264,8 @@ internal class GameInstance : IGameInstance
 		if ( !string.IsNullOrWhiteSpace( LaunchArguments.Map ) )
 		{
 			var map = LaunchArguments.Map;
+			Application.Map = map;
+
 			await LoadMapPackage( map, token );
 			Application.MapPackage = _mapPackage;
 		}
@@ -261,10 +285,9 @@ internal class GameInstance : IGameInstance
 
 		FileSystem.Mounted.Mount( activePackage.FileSystem );
 
-		EngineFileSystem.ProjectSettings = new AggregateFileSystem();
 		EngineFileSystem.ProjectSettings.Mount( activePackage.ProjectSettings );
-
-		Game.Language = new LanguageContainer( activePackage.Localization );
+		Game.Language.FileSystem.Mount( activePackage.Localization );
+		Game.Language.Refresh();
 
 		LoadProjectSettings();
 
@@ -273,7 +296,7 @@ internal class GameInstance : IGameInstance
 		if ( !IsDeveloperHost )
 		{
 			Log.Trace( $"Loading GameResources" );
-			ResourceLoader.LoadAllGameResource( FileSystem.Mounted );
+			await ResourceLoader.LoadAllGameResourceAsync( FileSystem.Mounted, token );
 		}
 
 		if ( !achievementTask.IsCompleted )
@@ -524,13 +547,14 @@ class MenuLoadingScreen : ILoadingInterface
 {
 	public void Dispose()
 	{
-		LoadingScreen.Title = "";
 		LoadingScreen.Subtitle = "";
 	}
 
 	public void LoadingProgress( LoadingProgress progress )
 	{
 		LoadingScreen.Title = $"{progress.Title}";
-		LoadingScreen.Subtitle = $"{progress.Percent:n0}% • {progress.Mbps:n0}mbps • {progress.CalculateETA().ToRemainingTimeString()}";
+		LoadingScreen.Subtitle = progress.Mbps > 0
+			? $"{progress.Percent:n0}% • {progress.Mbps:n0}mbps • {progress.CalculateETA().ToRemainingTimeString()}"
+			: "";
 	}
 }

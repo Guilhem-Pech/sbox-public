@@ -44,14 +44,14 @@ internal static partial class Logging
 #pragma warning restore CA2000 // Dispose objects before losing scope
 		{
 			FileName = System.IO.Path.Combine( gamePath, $"logs/{appName}.log" ),
-			ArchiveFileName = System.IO.Path.Combine( gamePath, "logs/" + appName + "-${date:format=yyyy-MM-dd}.zip" ),
+			ArchiveFileName = System.IO.Path.Combine( gamePath, "logs/" + appName + "-${date:format=yyyy-MM-dd}.log" ),
 			ArchiveOldFileOnStartup = true,
 			ArchiveAboveSize = 512 * 1024 * 1024,
 			ArchiveEvery = FileArchivePeriod.Day,
 			OpenFileCacheSize = 10,
 			MaxArchiveFiles = 10,
 			KeepFileOpen = true,
-			EnableArchiveFileCompression = true,
+			EnableArchiveFileCompression = false,
 
 
 			//DeleteOldFileOnStartup = true,
@@ -165,6 +165,16 @@ internal static partial class Logging
 
 	internal static event Action<LogEvent> OnMessage;
 	internal static Action<Exception> OnException;
+
+	/// <summary>
+	/// Remove all OnMessage / OnException subscribers. Called during shutdown
+	/// so static delegates don't root addon panels (e.g. Console).
+	/// </summary>
+	public static void ClearListeners()
+	{
+		OnMessage = null;
+		OnException = null;
+	}
 
 	static Channel<LogEvent> QueuedMessages = Channel.CreateUnbounded<LogEvent>();
 

@@ -1,11 +1,11 @@
 ﻿using Facepunch.ActionGraphs;
 using Sandbox.ActionGraphs;
 using Sandbox.Engine;
-using Sandbox.MovieMaker;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using Sandbox.Utility;
 
 namespace Sandbox;
 
@@ -32,7 +32,7 @@ public static partial class Json
 		GlobalContext.Current.JsonSerializerOptions = new JsonSerializerOptions( JsonSerializerOptions.Default );
 		options.WriteIndented = true;
 		options.PropertyNameCaseInsensitive = true;
-		options.NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString | System.Text.Json.Serialization.JsonNumberHandling.AllowNamedFloatingPointLiterals;
+		options.NumberHandling = JsonNumberHandling.AllowReadingFromString | JsonNumberHandling.AllowNamedFloatingPointLiterals;
 		options.DefaultIgnoreCondition = JsonIgnoreCondition.Never;
 		options.ReadCommentHandling = JsonCommentHandling.Skip;
 		options.MaxDepth = 512;
@@ -40,8 +40,9 @@ public static partial class Json
 
 		options.Converters.Add( new JsonStringEnumConverter( null, true ) );
 		options.Converters.Add( new BinaryConvert() );
+
 		options.Converters.Add( new JsonConvertFactory() );
-		options.Converters.Add( new MovieResourceConverter() );
+		options.Converters.Add( new AnyOfTypeConverterFactory() );
 		options.Converters.Add( new InterfaceConverterFactory() );
 
 		if ( typeLibrary is not null )
@@ -75,6 +76,22 @@ public static partial class Json
 	public static T Deserialize<T>( string source )
 	{
 		return JsonSerializer.Deserialize<T>( source, options );
+	}
+
+	/// <summary>
+	/// Deserialize from a Utf8JsonReader to given type, using our engine specific options.
+	/// </summary>
+	public static T Deserialize<T>( ref Utf8JsonReader reader )
+	{
+		return JsonSerializer.Deserialize<T>( ref reader, options );
+	}
+
+	/// <summary>
+	/// Deserialize from a Utf8JsonReader to given type, using our engine specific options.
+	/// </summary>
+	public static object Deserialize( ref Utf8JsonReader reader, System.Type t )
+	{
+		return JsonSerializer.Deserialize( ref reader, t, options );
 	}
 
 	/// <summary>
@@ -125,6 +142,22 @@ public static partial class Json
 	}
 
 	/// <summary>
+	/// Serialize to a Utf8JsonWriter using our engine specific options.
+	/// </summary>
+	public static void Serialize<T>( Utf8JsonWriter writer, T target )
+	{
+		JsonSerializer.Serialize( writer, target, options );
+	}
+
+	/// <summary>
+	/// Serialize to a Utf8JsonWriter using our engine specific options.
+	/// </summary>
+	public static void Serialize( Utf8JsonWriter writer, object target, Type inputType )
+	{
+		JsonSerializer.Serialize( writer, target, inputType, options );
+	}
+
+	/// <summary>
 	/// Parse some Json to a JsonObject
 	/// </summary>
 	public static JsonObject ParseToJsonObject( string json )
@@ -170,15 +203,8 @@ public static partial class Json
 		}
 	}
 
-	internal static void DeserializeToObject( object target, JsonObject root )
-	{
-		if ( target is null )
-			return;
-
-		var type = target.GetType();
-
-		// TODO: we can probably cache this
-		var propertyDict = type.GetProperties( BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic )
+	static readonly ReflectionCache<Type, Dictionary<string, PropertyInfo>> DeserializePropertyCache = new( static t =>
+		t.GetProperties( BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic )
 			.Where( x => x.CanWrite )
 			.Where( x =>
 				x.SetMethod!.IsPublic && !x.HasAttribute( typeof( JsonIgnoreAttribute ) ) ||
@@ -186,7 +212,16 @@ public static partial class Json
 				x.HasAttribute( typeof( PropertyAttribute ) ) )
 			.Select( x => (Name: x.GetCustomAttribute<JsonPropertyNameAttribute>() is { } jpna ? jpna.Name : x.Name, Property: x) )
 			.DistinctBy( x => x.Name, StringComparer.OrdinalIgnoreCase )
-			.ToDictionary( x => x.Name, x => x.Property, StringComparer.OrdinalIgnoreCase );
+			.ToDictionary( x => x.Name, x => x.Property, StringComparer.OrdinalIgnoreCase ) );
+
+	internal static void DeserializeToObject( object target, JsonObject root )
+	{
+		if ( target is null )
+			return;
+
+		var type = target.GetType();
+
+		var propertyDict = DeserializePropertyCache[type];
 
 		foreach ( var property in root )
 		{
@@ -320,6 +355,41 @@ public static partial class Json
 				value.ReplaceWith( v );
 			}
 		}
+	}
+
+	/// <summary>
+	/// When true, attempting to deserialize a Doo or ActionGraph will throw.
+	/// </summary>
+	[ThreadStatic]
+	private static bool scriptDeserializationDisabled;
+
+	/// <summary>
+	/// Throws if we're in a <see cref="DisableScriptDeserialization"/> block.
+	/// </summary>
+	internal static void AssertCanDeserializeScripts()
+	{
+		if ( scriptDeserializationDisabled )
+		{
+			throw new Exception( "Script deserialization is disabled in this context." );
+		}
+	}
+
+	/// <summary>
+	/// Disables deserializing scripts until the returned <see cref="IDisposable"/> is disposed.
+	/// This should wrap any deserialization of payloads from untrusted sources.
+	/// </summary>
+	internal static IDisposable DisableScriptDeserialization()
+	{
+		var agScope = ActionGraph.PushSerializationOptions( new SerializationOptions( DeserializeMode: DeserializeMode.DisabledThrow ) );
+		var prev = scriptDeserializationDisabled;
+
+		scriptDeserializationDisabled = true;
+
+		return new DisposeAction( () =>
+		{
+			agScope.Dispose();
+			scriptDeserializationDisabled = prev;
+		} );
 	}
 }
 

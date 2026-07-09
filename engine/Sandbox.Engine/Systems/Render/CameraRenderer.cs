@@ -63,6 +63,11 @@ internal ref struct CameraRenderer
 		Attributes.Set( "ambientColor", ambientLight );
 		Attributes.Set( "clearColor", config.ClearColor ?? camera.BackgroundColor );
 
+		if ( DebugOverlay.ToolsVisualization.mat_toolsvis != SceneCameraDebugMode.Normal )
+		{
+			Attributes.Set( "ToolsVisMode", (int)DebugOverlay.ToolsVisualization.mat_toolsvis );
+		}
+
 		camera.GatherVolumetricFog( Attributes );
 		camera.GatherTonemapper( Attributes );
 		camera.CubemapFog?.Write( Attributes );
@@ -98,6 +103,7 @@ internal ref struct CameraRenderer
 		Native.ClipSpaceBounds = config.ClipSpaceBounds ?? new Vector4( -1, -1, 1, 1 );
 		Native.EnablePostprocessing = config.EnablePostprocessing ?? camera.EnablePostProcessing;
 		Native.EnableEngineOverlays = camera.EnableEngineOverlays;
+		Native.EnableUI = camera.RenderUI;
 		Native.FlipX = config.FlipX ?? false;
 		Native.FlipY = config.FlipY ?? false;
 
@@ -117,6 +123,9 @@ internal ref struct CameraRenderer
 		{
 			Native.OrthoSize = camera.OrthoHeight / camera.Size.y;
 		}
+
+		if ( camera.ExcludeFromTextureStreaming )
+			Native.SceneViewFlags |= NativeEngine.SceneViewFlags.SVF_NO_TEXTURE_STREAMING;
 
 		//
 		// add worlds

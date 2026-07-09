@@ -24,7 +24,7 @@ sealed class DDGIVolumeSystem : GameObjectSystem<DDGIVolumeSystem>
 		ReleaseBuffer();
 
 		Scene?.RenderAttributes?.Set( "DDGI_VolumeCount", 0 );
-		//Scene?.RenderAttributes?.Set( "DDGI_Volumes", (GpuBuffer)null );
+		Scene?.RenderAttributes?.Set( "DDGI_Volumes", (GpuBuffer)null );
 
 		base.Dispose();
 	}
@@ -36,10 +36,24 @@ sealed class DDGIVolumeSystem : GameObjectSystem<DDGIVolumeSystem>
 
 	private void UpdateVolumes()
 	{
-		if ( Application.IsHeadless || !_dirty )
+		using var _ = PerformanceStats.Timings.Render.Scope();
+
+		if ( Application.IsHeadless )
 			return;
 
 		if ( Scene?.RenderAttributes is null )
+			return;
+
+		// Mark textures as used every frame, so the streaming system keeps 
+		// them resident while the volumes are active.
+		foreach ( var volume in Scene.GetAll<IndirectLightVolume>().Where( v => v is { Active: true, Enabled: true } ) )
+		{
+			volume.IrradianceTexture?.MarkUsed();
+			volume.DistanceTexture?.MarkUsed();
+			volume.RelocationTexture?.MarkUsed();
+		}
+
+		if ( !_dirty )
 			return;
 
 		_dirty = false;
@@ -70,7 +84,7 @@ sealed class DDGIVolumeSystem : GameObjectSystem<DDGIVolumeSystem>
 		// No valid volumes: clear renderer attributes to avoid stale data.
 		ReleaseBuffer();
 		Scene.RenderAttributes.Set( "DDGI_VolumeCount", 0 );
-		//Scene.RenderAttributes.Set( "DDGI_Volumes", (GpuBuffer)null );
+		Scene.RenderAttributes.Set( "DDGI_Volumes", (GpuBuffer)null );
 	}
 
 	private void EnsureBufferCapacity( int count )

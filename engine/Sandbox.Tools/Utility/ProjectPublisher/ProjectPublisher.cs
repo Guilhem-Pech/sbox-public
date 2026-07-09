@@ -40,7 +40,7 @@ public partial class ProjectPublisher
 		// p.Manifest.IncludeSourceFiles = asset.Publishing.ProjectConfig.IncludeSourceFiles;
 		p.Manifest.IncludeSourceFiles = false; // tony: Disabled this until we implement it in a better way
 		p.SetMetaFromAsset( asset );
-		await p.Manifest.BuildFrom( asset );
+		await p.Manifest.BuildFrom( asset, fakeProject );
 
 		// include thumbnail!
 		var thumb = await asset.RenderThumb();
@@ -90,7 +90,7 @@ public partial class ProjectPublisher
 
 		foreach ( var cvar in vars )
 		{
-			var e = new GameSetting( cvar.Attribute.Name, cvar.Member.Name, cvar.Member.Group );
+			var e = new GameSetting( cvar.Attribute.Name, cvar.Member.Title, cvar.Member.Group );
 
 			if ( e.Min != 0f )
 			{

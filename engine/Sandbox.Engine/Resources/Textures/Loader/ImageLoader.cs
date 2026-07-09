@@ -48,6 +48,7 @@ internal static class Image
 				codec = null; // ownership transferred to Animation
 
 				var texture = CreateTexture( animation.Bitmap, debugName );
+				texture.IsAnimated = true;
 				animation.Texture = new System.WeakReference<Texture>( texture );
 				Texture.Animations.Add( animation );
 
@@ -137,6 +138,9 @@ internal static class Image
 	public static Texture Load( BaseFileSystem filesystem, string filename, bool warnOnMissing = true )
 	{
 		filename = filename.Normalize();
+
+		if ( Game.Resources.Get<Texture>( filename ) is { } cached )
+			return cached;
 
 		try
 		{

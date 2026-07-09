@@ -15,6 +15,8 @@ public static partial class TextRendering
 		public TextFlag Flags;
 		public Vector2 Clip;
 		public bool IsEmpty;
+		public Rendering.FilterMode FilterMode;
+		internal int CacheKey;
 
 		public RealTimeSince TimeSinceUsed;
 
@@ -39,7 +41,8 @@ public static partial class TextRendering
 		{
 			_scope = scope;
 			IsEmpty = string.IsNullOrEmpty( _scope.Text );
-
+			FilterMode = scope.FilterMode;
+			TimeSinceUsed = 0;
 			_effectMargin = default;
 
 			if ( scope.Outline.Enabled && scope.Outline.Size > 0 )
@@ -194,7 +197,7 @@ public static partial class TextRendering
 			width += marginEdge.x.CeilToInt();
 			height += marginEdge.y.CeilToInt();
 
-			using ( var bitmap = new SkiaSharp.SKBitmap( width, height, SkiaSharp.SKColorType.Rgba8888, SkiaSharp.SKAlphaType.Unpremul ) )
+			using ( var bitmap = new SkiaSharp.SKBitmap( width, height, SkiaSharp.SKColorType.Bgra8888, SkiaSharp.SKAlphaType.Premul ) )
 			using ( var canvas = new SkiaSharp.SKCanvas( bitmap ) )
 			{
 				var o = new Topten.RichTextKit.TextPaintOptions
@@ -208,9 +211,7 @@ public static partial class TextRendering
 					Hinting = SKFontHinting.Full
 				};
 
-				// trying to prevent premultiply changing this to 0,0,0,0
-				SKColor clearColor = new( style.TextColor.Red, style.TextColor.Green, style.TextColor.Blue, 0 );
-				bitmap.Erase( clearColor );
+				canvas.Clear( style.TextColor.WithAlpha( 0 ) );
 
 				if ( !IsEmpty )
 				{
@@ -223,14 +224,17 @@ public static partial class TextRendering
 				var mips = (int)MathF.Log2( MathF.Min( width, height ) ) + 1;
 				mips = mips.Clamp( 1, 8 );
 
-				Texture = Texture.Create( width, height, ImageFormat.RGBA8888 )
+				Texture = Texture.Create( width, height, ImageFormat.BGRA8888 )
 									.WithName( "textblock" )
 									.WithData( bitmap.GetPixels(), width * height * bitmap.BytesPerPixel )
-									.WithDynamicUsage()
+									.WithStaticUsage()
 									.WithMips( mips )
 									.Finish();
 			}
 
+			// Re-register so Tick() can evict this block again if it was evicted while
+			// a CommandList still held a reference and triggered a texture rebuild.
+			if ( CacheKey != 0 ) Dictionary.TryAdd( CacheKey, this );
 		}
 
 

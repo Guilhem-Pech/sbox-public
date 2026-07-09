@@ -9,6 +9,7 @@ public partial class SceneEditorSession
 	public UndoSystem UndoSystem { get; } = new UndoSystem();
 
 	internal bool IsUndoScopeOpen = false;
+	bool _suppressUndoSounds = false;
 
 	private void InitUndo()
 	{
@@ -17,22 +18,49 @@ public partial class SceneEditorSession
 		// annoy everyone as much as possible
 		UndoSystem.OnUndo = ( x ) =>
 		{
-			if ( EditorPreferences.UndoSounds )
+			if ( !_suppressUndoSounds && EditorPreferences.UndoSounds )
 			{
 				EditorUtility.PlayRawSound( "sounds/editor/success.wav" );
 			}
 
 			HasUnsavedChanges = true;
 		};
+
 		UndoSystem.OnRedo = ( x ) =>
 		{
-			if ( EditorPreferences.UndoSounds )
+			if ( !_suppressUndoSounds && EditorPreferences.UndoSounds )
 			{
 				EditorUtility.PlayRawSound( "sounds/editor/success.wav" );
 			}
 
 			HasUnsavedChanges = true;
 		};
+	}
+
+	sealed class SuppressUndoSoundScope : IDisposable
+	{
+		readonly SceneEditorSession _session;
+		readonly bool _previous;
+
+		public SuppressUndoSoundScope( SceneEditorSession session )
+		{
+			_session = session;
+			_previous = session._suppressUndoSounds;
+			session._suppressUndoSounds = true;
+		}
+
+		public void Dispose()
+		{
+			_session._suppressUndoSounds = _previous;
+		}
+	}
+
+	/// <summary>
+	/// Temporarily disables undo/redo sounds.
+	/// </summary>
+	public IDisposable SuppressUndoSounds()
+	{
+		return new SuppressUndoSoundScope( this );
 	}
 
 	/// <summary>
@@ -181,7 +209,14 @@ internal sealed class SceneUndoSnapshot : IDisposable
 			ComponentRefs = components.Select( ComponentReference.FromInstance ).ToArray();
 
 			var serializeOptions = new GameObject.SerializeOptions { };
-			State = components.Select( comp => comp.Serialize( serializeOptions ) ).ToArray();
+			State = components.Select( comp =>
+			{
+				using var blobs = BlobDataSerializer.Capture();
+
+				var json = comp.Serialize( serializeOptions );
+				blobs.SaveTo( json );
+				return json;
+			} ).ToArray();
 		}
 
 		public void Restore( Scene scene )
@@ -202,13 +237,14 @@ internal sealed class SceneUndoSnapshot : IDisposable
 
 		public void PostRestore( Scene scene )
 		{
-			foreach ( var compRef in ComponentRefs )
+			for ( int i = 0; i < ComponentRefs.Length; i++ )
 			{
-				var comp = compRef.Resolve( scene );
-				if ( comp.IsValid() )
-				{
-					compRef.Resolve( scene )?.PostDeserialize();
-				}
+				var comp = ComponentRefs[i].Resolve( scene );
+				if ( !comp.IsValid() )
+					continue;
+
+				using var blobs = BlobDataSerializer.LoadFrom( State[i] );
+				comp.PostDeserialize();
 			}
 		}
 
@@ -255,7 +291,12 @@ internal sealed class SceneUndoSnapshot : IDisposable
 				var serializeOptions = new GameObject.SerializeOptions { IgnoreChildren = !flags.HasFlag( GameObjectUndoFlags.Children ), IgnoreComponents = !flags.HasFlag( GameObjectUndoFlags.Components ) };
 				GameObjectRefs.Add( GameObjectReference.FromInstance( go ) );
 				if ( go.IsOutermostPrefabInstanceRoot ) go.PrefabInstance.RefreshPatch();
-				State.Add( go.Serialize( serializeOptions ) );
+
+				using var blobs = BlobDataSerializer.Capture();
+
+				var json = go.Serialize( serializeOptions );
+				blobs.SaveTo( json );
+				State.Add( json );
 				GameObjectNextSiblingRefs.Add( go.GetNextSibling( false ).IsValid() ? GameObjectReference.FromInstance( go.GetNextSibling( false ) ) : GameObjectReference.FromId( Guid.Empty ) );
 				GameObjectParentRefs.Add( go.Parent.IsValid() ? GameObjectReference.FromInstance( go.Parent ) : GameObjectReference.FromId( Guid.Empty ) );
 			}
@@ -296,9 +337,9 @@ internal sealed class SceneUndoSnapshot : IDisposable
 					continue;
 				}
 
+				using var blobs = BlobDataSerializer.LoadFrom( State[i] );
 				go.Deserialize( State[i], new GameObject.DeserializeOptions { IsRefreshing = true } );
 			}
-
 
 			RestoreHierachy( scene );
 		}
@@ -473,7 +514,10 @@ internal sealed class SceneUndoSnapshot : IDisposable
 		// if deletion is requested, we need to capture the whole scene
 		if ( _captureDestructions )
 		{
+			using var blobs = BlobDataSerializer.Capture();
+
 			scene = _session.Scene.Serialize();
+			blobs.SaveTo( scene );
 		}
 
 		SelectionSnapshot selection = null;
@@ -513,10 +557,24 @@ internal sealed class SceneUndoSnapshot : IDisposable
 	public void Dispose()
 	{
 		if ( _alreadyDisposed )
-		{
 			return;
-		}
 
+		try
+		{
+			DisposeInternal();
+		}
+		finally
+		{
+			_session?.Scene?.Directory?.OnComponentAdded -= OnComponentAdded;
+			_session?.Scene?.Directory?.OnGameObjectAdded -= OnGameObjectAdded;
+
+			_session?.IsUndoScopeOpen = false;
+			_alreadyDisposed = true;
+		}
+	}
+
+	void DisposeInternal()
+	{
 		using var sceneScope = _session.Scene.Push();
 
 		// Redo snapshots
@@ -651,9 +709,6 @@ internal sealed class SceneUndoSnapshot : IDisposable
 
 		var prefabInstanceRootsRequiringRefresh = new HashSet<GameObject>();
 
-		_session.Scene.Directory.OnComponentAdded -= OnComponentAdded;
-		_session.Scene.Directory.OnGameObjectAdded -= OnGameObjectAdded;
-
 		// if nothing changed, don't add an undo
 		if ( _initialState == disposeState )
 		{
@@ -678,6 +733,8 @@ internal sealed class SceneUndoSnapshot : IDisposable
 				if ( preChangeStateCopy.Scene != null )
 				{
 					_session.Scene.Clear();
+
+					using var blobs = BlobDataSerializer.LoadFrom( preChangeStateCopy.Scene );
 
 					using ( CallbackBatch.Isolated() )
 					{
@@ -751,9 +808,6 @@ internal sealed class SceneUndoSnapshot : IDisposable
 					disposeState.Selection.Restore( _session.Scene );
 				}
 			} );
-
-		_alreadyDisposed = true;
-		_session.IsUndoScopeOpen = false;
 	}
 
 	private void OnComponentAdded( Component comp )

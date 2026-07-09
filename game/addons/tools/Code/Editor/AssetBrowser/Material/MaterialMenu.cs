@@ -1,4 +1,6 @@
-﻿namespace Editor;
+﻿using Sandbox.Resources;
+
+namespace Editor;
 
 internal static class MaterialMenu
 {
@@ -47,7 +49,7 @@ internal static class MaterialMenu
 		if ( isTextureSheet )
 		{
 			var paths = entries.Select( x => System.IO.Path.ChangeExtension( x.Asset.Path, System.IO.Path.GetExtension( x.Asset.AbsolutePath ) ) );
-			var file = TextureEditor.TextureFile.CreateDefault( paths );
+			var file = Inspectors.TextureInspector.TextureFile.CreateDefault( paths );
 			var json = Json.Serialize( file );
 			System.IO.File.WriteAllText( fd.SelectedFile, json );
 
@@ -60,7 +62,7 @@ internal static class MaterialMenu
 			{
 				var path = System.IO.Path.ChangeExtension( p.Asset.Path, System.IO.Path.GetExtension( p.Asset.AbsolutePath ) );
 				bool noCompress = p.Asset.MetaData.Get<bool>( "nocompress" );
-				var file = TextureEditor.TextureFile.CreateDefault( [path], noCompress );
+				var file = Inspectors.TextureInspector.TextureFile.CreateDefault( [path], noCompress );
 				var json = Json.Serialize( file );
 				var outPath = System.IO.Path.Combine( System.IO.Path.GetDirectoryName( fd.SelectedFile ), System.IO.Path.GetFileNameWithoutExtension( path ) + ".vtex" );
 				System.IO.File.WriteAllText( outPath, json );
@@ -134,7 +136,7 @@ internal static class MaterialMenu
 		string tintMask = assetPeers.Where( x => x.Name.Contains( "_mask" ) ).Select( x => x.RelativePath ).FirstOrDefault();
 		if ( tintMask != null )
 		{
-			tintMask = $"\n	F_TINT_MASK 1\n	TextureTintMask \"{texSelfIllum}\"";
+			tintMask = $"\n	F_TINT_MASK 1\n	TextureTintMask \"{tintMask}\"";
 		}
 
 		var file = $@"
@@ -178,9 +180,8 @@ Layer0
 
 		if ( isAnimation )
 		{
-			// Export one sprite with each frame as an animation
-			var paths = entries.Select( x => System.IO.Path.ChangeExtension( x.Asset.Path, System.IO.Path.GetExtension( x.Asset.AbsolutePath ) ) );
-			var sprite = Sprite.FromTextures( paths.Select( x => Texture.Load( x ) ).ToArray() );
+			var textures = entries.Select( x => TextureFromImageFile( x ) ).Where( x => x is not null ).ToArray();
+			var sprite = Sprite.FromTextures( textures );
 			var json = sprite.Serialize().ToJsonString();
 			System.IO.File.WriteAllText( fd.SelectedFile, json );
 
@@ -195,10 +196,12 @@ Layer0
 			// Export individual sprites
 			foreach ( var p in entries )
 			{
-				var path = System.IO.Path.ChangeExtension( p.Asset.Path, System.IO.Path.GetExtension( p.Asset.AbsolutePath ) );
-				var sprite = Sprite.FromTexture( Texture.Load( path ) );
+				var texture = TextureFromImageFile( p );
+				if ( texture is null ) continue;
+
+				var sprite = Sprite.FromTexture( texture );
 				var json = sprite.Serialize().ToJsonString();
-				var outPath = System.IO.Path.Combine( System.IO.Path.GetDirectoryName( fd.SelectedFile ), System.IO.Path.GetFileNameWithoutExtension( path ) + ".sprite" );
+				var outPath = System.IO.Path.Combine( System.IO.Path.GetDirectoryName( fd.SelectedFile ), System.IO.Path.GetFileNameWithoutExtension( p.Asset.AbsolutePath ) + ".sprite" );
 				System.IO.File.WriteAllText( outPath, json );
 
 				asset = AssetSystem.RegisterFile( outPath );
@@ -212,5 +215,15 @@ Layer0
 		MainAssetBrowser.Instance?.Local.UpdateAssetList();
 		MainAssetBrowser.Instance?.Local.FocusOnAsset( asset );
 		EditorUtility.InspectorObject = asset;
+	}
+
+	private static Texture TextureFromImageFile( AssetEntry entry )
+	{
+		var generator = new ImageFileGenerator
+		{
+			FilePath = entry.Asset.RelativePath
+		};
+
+		return generator.Create( ResourceGenerator.Options.Default );
 	}
 }

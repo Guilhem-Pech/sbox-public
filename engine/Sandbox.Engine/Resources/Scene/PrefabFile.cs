@@ -7,9 +7,27 @@ namespace Sandbox;
 /// A GameObject which is saved to a file.
 /// </summary>
 [Expose]
-[AssetType( Name = "Prefab", Extension = "prefab", Category = "World", Flags = AssetTypeFlags.NoEmbedding )]
+[AssetType( Name = "Prefab", Extension = "prefab", Category = "World", Flags = AssetTypeFlags.NoEmbedding, IconColor = "#86c4fe" )]
 public partial class PrefabFile : GameResource
 {
+	/// <summary>
+	/// Load a prefab by file path. Also handles mount:// paths
+	/// </summary>
+	public static PrefabFile Load( string path )
+	{
+		if ( string.IsNullOrWhiteSpace( path ) )
+			return null;
+
+		var existing = ResourceLibrary.Get<PrefabFile>( path );
+		if ( existing is not null )
+			return existing;
+
+		if ( Mounting.Directory.TryLoad( path, Mounting.ResourceType.PrefabFile, out var mounted ) && mounted is PrefabFile pf )
+			return pf;
+
+		return null;
+	}
+
 	/// <summary>
 	/// Contains the original JSON read from File.
 	/// </summary>

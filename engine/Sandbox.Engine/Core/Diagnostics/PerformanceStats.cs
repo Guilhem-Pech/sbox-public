@@ -107,6 +107,8 @@ public static partial class PerformanceStats
 		GcPause = pauseTicks - _prevPauseTime;
 		_prevPauseTime = pauseTicks;
 
+		Timings.GcPause.AddMilliseconds( TimeSpan.FromTicks( GcPause ).TotalMilliseconds );
+
 		var gen0 = GC.CollectionCount( 0 );
 		var gen1 = GC.CollectionCount( 1 );
 		var gen2 = GC.CollectionCount( 2 );
@@ -158,7 +160,14 @@ public static partial class PerformanceStats
 		_history.Clear();
 		secondTimer.Restart();
 
-		FrameStats._current = new FrameStats( NativeEngine.CSceneSystem.GetPerFrameStats() );
+		ulong poolUsed = 0, poolLimit = 0, poolNonEvictable = 0;
+		g_pRenderDevice.GetTexturePoolStats( out poolUsed, out poolLimit, out poolNonEvictable );
+		FrameStats._current = new FrameStats(
+			NativeEngine.CSceneSystem.GetPerFrameStats(),
+			NativeEngine.CSceneSystem.GetNumUnbatchableMaterials(),
+			g_pRenderDevice.GetGpuStatsSummary(),
+			NativeEngine.g_pResourceSystem.GetNumPendingStreamingRequests(),
+			poolUsed, poolLimit, poolNonEvictable );
 
 		return true;
 	}

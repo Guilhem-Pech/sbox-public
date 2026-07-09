@@ -8,12 +8,35 @@ namespace Sandbox;
 
 public class ResourceSystem
 {
+	// Index of Json based, GameResources PrefabFile, DecalDefintions etc.
 	private Dictionary<int, Resource> ResourceIndex { get; } = new();
+
+	// Weak references to native resources (Model, Material, Texture, Shader, etc.) — GC-friendly.
 	private Dictionary<int, WeakReference<Resource>> WeakIndex { get; } = new();
+
+	private Dictionary<ulong, Resource> ResourceIndexLong { get; } = new();
+
+	private Dictionary<ulong, WeakReference<Resource>> WeakIndexLong { get; } = new();
+
+	/// Maps ResourceIdLong → path for all resources that exist on disk.
+	/// Populated at startup without loading anything; used as on-demand load fallback during
+	/// network deserialization when a resource hasn't been loaded on the client yet.
+	private Dictionary<ulong, string> PathIndex { get; } = new();
+
+	// Used to register resources path for use in networking
+	internal void RegisterPath( string path )
+	{
+		path = Resource.FixPath( path );
+		if ( string.IsNullOrEmpty( path ) ) return;
+		PathIndex[path.FastHash64()] = path;
+	}
 
 	internal void Register( Resource resource )
 	{
+#pragma warning disable CS0618 // Type or member is obsolete
 		ResourceIndex[resource.ResourceId] = resource;
+#pragma warning restore CS0618 // Type or member is obsolete
+		ResourceIndexLong[resource.ResourceIdLong] = resource;
 
 		if ( resource is GameResource gameResource && !gameResource.IsPromise )
 		{
@@ -26,7 +49,10 @@ public class ResourceSystem
 	/// </summary>
 	internal void RegisterWeak( Resource resource )
 	{
+#pragma warning disable CS0618 // Type or member is obsolete
 		WeakIndex[resource.ResourceId] = new WeakReference<Resource>( resource );
+#pragma warning restore CS0618 // Type or member is obsolete
+		WeakIndexLong[resource.ResourceIdLong] = new WeakReference<Resource>( resource );
 	}
 
 	internal void Unregister( Resource resource )
@@ -36,15 +62,14 @@ public class ResourceSystem
 
 		// Make sure we're unregistering the currently indexed resource
 
-		if ( ResourceIndex.TryGetValue( resource.ResourceId, out var existing ) && existing == resource )
-		{
-			// native asset system doesn't support asset removal right now,
-			// so just remove it from the index to ensure we don't retrieve it anymore
+		ResourceIndexLong.Remove( resource.ResourceIdLong );
+		WeakIndexLong.Remove( resource.ResourceIdLong );
 
-			ResourceIndex.Remove( resource.ResourceId );
-		}
-
+#pragma warning disable CS0618 // Type or member is obsolete
+		ResourceIndex.Remove( resource.ResourceId );
 		WeakIndex.Remove( resource.ResourceId );
+#pragma warning restore CS0618 // Type or member is obsolete
+
 
 		if ( resource is GameResource gameResource && !gameResource.IsPromise )
 		{
@@ -75,6 +100,12 @@ public class ResourceSystem
 		{
 			WeakIndex.Remove( key );
 		}
+
+		var deadNative = WeakIndexLong.Where( kvp => !kvp.Value.TryGetTarget( out _ ) ).Select( kvp => kvp.Key ).ToList();
+		foreach ( var key in deadNative )
+		{
+			WeakIndexLong.Remove( key );
+		}
 	}
 
 	internal void Clear()
@@ -91,32 +122,17 @@ public class ResourceSystem
 		foreach ( var resource in toDispose )
 		{
 			// Don't wait/rely for finalizer get rid of this immediately
-			resource.Destroy();
+			resource?.Destroy();
 		}
 
 		ResourceIndex.Clear();
 		WeakIndex.Clear();
 
+		ResourceIndexLong.Clear();
+		WeakIndexLong.Clear();
+		PathIndex.Clear();
+
 		TypeCache.Clear();
-	}
-
-	internal Resource Get( System.Type t, int identifier )
-	{
-		if ( ResourceIndex.TryGetValue( identifier, out var resource ) )
-		{
-			if ( resource.GetType().IsAssignableTo( t ) )
-				return resource;
-
-			return null;
-		}
-
-		if ( WeakIndex.TryGetValue( identifier, out var weakRef ) && weakRef.TryGetTarget( out var weakResource ) )
-		{
-			if ( weakResource.GetType().IsAssignableTo( t ) )
-				return weakResource;
-		}
-
-		return null;
 	}
 
 	/// <summary>
@@ -141,8 +157,23 @@ public class ResourceSystem
 	internal Resource Get( System.Type t, string filepath )
 	{
 		filepath = Resource.FixPath( filepath );
+		ulong identifier = filepath.FastHash64();
 
-		return Get( t, filepath.FastHash() );
+		if ( ResourceIndexLong.TryGetValue( identifier, out var resource ) )
+		{
+			if ( resource.GetType().IsAssignableTo( t ) )
+				return resource;
+
+			return null;
+		}
+
+		if ( WeakIndexLong.TryGetValue( identifier, out var weakRef ) && weakRef.TryGetTarget( out var weakResource ) )
+		{
+			if ( weakResource.GetType().IsAssignableTo( t ) )
+				return weakResource;
+		}
+
+		return null;
 	}
 
 	/// <summary>
@@ -150,6 +181,7 @@ public class ResourceSystem
 	/// </summary>
 	/// <typeparam name="T">Resource type to get.</typeparam>
 	/// <param name="identifier">Resource hash to look up.</param>
+	[Obsolete( "Use Get<T>(path) instead. Identifier based access will be removed in a future update." )]
 	public T Get<T>( int identifier ) where T : Resource
 	{
 		if ( ResourceIndex.TryGetValue( identifier, out var resource ) )
@@ -161,6 +193,23 @@ public class ResourceSystem
 		return default;
 	}
 
+	// Internal use only — do not expose ulong IDs publicly.
+	internal T GetByIdLong<T>( ulong idLong ) where T : Resource
+	{
+		if ( ResourceIndexLong.TryGetValue( idLong, out var resource ) )
+			return resource as T;
+
+		if ( WeakIndexLong.TryGetValue( idLong, out var weakRef ) && weakRef.TryGetTarget( out var weakResource ) )
+			return weakResource as T;
+
+		return default;
+	}
+
+	internal string LookupPath( ulong idLong )
+	{
+		return PathIndex.GetValueOrDefault( idLong );
+	}
+
 	/// <summary>
 	/// Get a cached resource by its file path.
 	/// </summary>
@@ -170,7 +219,7 @@ public class ResourceSystem
 	{
 		filepath = Resource.FixPath( filepath );
 
-		return Get<T>( filepath.FastHash() );
+		return GetByIdLong<T>( filepath.FastHash64() );
 	}
 
 	/// <summary>
@@ -366,7 +415,7 @@ public class ResourceSystem
 		return null;
 	}
 
-	internal T LoadGameResource<T>( string file, BaseFileSystem fs, bool deferPostload = false ) where T : GameResource
+	internal T LoadGameResource<T>( string file, BaseFileSystem fs, bool deferPostload = false, Package sourcePackage = null ) where T : GameResource
 	{
 		var attr = typeof( T ).GetCustomAttribute<AssetTypeAttribute>();
 		if ( attr == null ) return default;
@@ -375,13 +424,13 @@ public class ResourceSystem
 		// but this ain't TypeLibrary kiddo
 		attr.TargetType = typeof( T );
 
-		return LoadGameResource( attr, file, fs, deferPostload ) as T;
+		return LoadGameResource( attr, file, fs, deferPostload, sourcePackage ) as T;
 	}
 
 	/// <summary>
 	/// Loads a Gameresource from disk. Doesn't look at cache. Registers the resource if successful.
 	/// </summary>
-	internal GameResource LoadGameResource( AssetTypeAttribute type, string file, BaseFileSystem fs, bool deferPostload = false )
+	internal GameResource LoadGameResource( AssetTypeAttribute type, string file, BaseFileSystem fs, bool deferPostload = false, Package sourcePackage = null )
 	{
 		Assert.NotNull( type );
 		Assert.NotNull( file );
@@ -405,6 +454,12 @@ public class ResourceSystem
 
 			var se = GameResource.GetPromise( type.TargetType, file );
 			if ( se is null ) return null;
+
+			// Attribute the resource to the package it was loaded from (null = local project).
+			// Only overwrite when a package is supplied so aggregate reloads don't clobber a
+			// previously attributed cloud package.
+			if ( sourcePackage is not null )
+				se.Package = sourcePackage;
 
 			se.TryLoadFromData( data );
 
@@ -465,6 +520,7 @@ public static class ResourceLibrary
 	/// </summary>
 	/// <typeparam name="T">Resource type to get.</typeparam>
 	/// <param name="identifier">Resource hash to look up.</param>
+	[Obsolete( "Use Get<T>(filepath) instead. Identifier based access will be removed in a future update." )]
 	public static T Get<T>( int identifier ) where T : Resource => Game.Resources.Get<T>( identifier );
 
 	/// <summary>
@@ -510,6 +566,11 @@ public static class ResourceLibrary
 		var type = typeof( T );
 		if ( type.IsSubclassOf( typeof( GameResource ) ) )
 		{
+			if ( type == typeof( PrefabFile ) )
+			{
+				return (T)(object)PrefabFile.Load( path );
+			}
+
 			// Really should be loaded already I think?
 			return Get<T>( path );
 		}

@@ -14,11 +14,11 @@ internal abstract class NavMeshSpatialAuxiliaryData
 
 	public NavMeshAreaDefinition AreaDefinition;
 
-	public IEnumerable<Vector2Int> CurrentOverlappingTiles => currentOverlappingTiles;
+	public HashSet<Vector2Int> CurrentOverlappingTiles => currentOverlappingTiles;
 
 	private HashSet<Vector2Int> currentOverlappingTiles = new();
 
-	public IEnumerable<Vector2Int> PreviousOverlappingTiles => previousOverlappingTiles;
+	public HashSet<Vector2Int> PreviousOverlappingTiles => previousOverlappingTiles;
 
 	private HashSet<Vector2Int> previousOverlappingTiles = new();
 
@@ -57,7 +57,7 @@ internal class NavMeshAreaData : NavMeshSpatialAuxiliaryData
 
 	protected override RectInt CalculateCurrentOverlappingTiles( NavMesh navMesh )
 	{
-		if ( Volume.Type == SceneVolume.VolumeTypes.Infinite ) return navMesh.CalculateMinMaxTileCoords( navMesh.WorldBounds );
+		if ( Volume.Type == SceneVolume.VolumeTypes.Infinite ) return navMesh.CalculateMinMaxTileCoords( navMesh.Bounds );
 
 		return navMesh.CalculateMinMaxTileCoords( WorldBounds );
 	}

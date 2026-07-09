@@ -1,4 +1,6 @@
 ﻿using Sandbox;
+using Sandbox.Hashing;
+using System.Buffers.Binary;
 using System.Collections.ObjectModel;
 using System.Text.Json.Nodes;
 using static Sandbox.GameObject;
@@ -45,6 +47,28 @@ internal class PrefabInstanceData
 	}
 
 	/// <summary>
+	/// Deterministically derives a stable instance guid for a prefab object with no persisted mapping
+	/// entry (e.g. one added to a nested prefab after its consumers were saved). Stable across cache
+	/// rebuilds, unique per instance. Compatibility contract: changing it invalidates saved identities.
+	/// </summary>
+	internal static Guid DeriveInstanceGuid( Guid seed, Guid prefabGuid )
+	{
+		Span<byte> input = stackalloc byte[32];
+		seed.TryWriteBytes( input[..16] );
+		prefabGuid.TryWriteBytes( input[16..] );
+
+		Span<byte> derived = stackalloc byte[16];
+		BinaryPrimitives.WriteUInt64LittleEndian( derived[..8], XxHash3.HashToUInt64( input ) );
+		BinaryPrimitives.WriteUInt64LittleEndian( derived[8..], XxHash3.HashToUInt64( input, seed: 0x5bd1e9955bd1e995 ) );
+
+		// Mark as an RFC 4122 version 8 (custom) guid so derived ids are well formed and recognizable
+		derived[7] = (byte)((derived[7] & 0x0F) | 0x80);
+		derived[8] = (byte)((derived[8] & 0x3F) | 0x80);
+
+		return new Guid( derived );
+	}
+
+	/// <summary>
 	/// Initialize lookups for this prefab instance.
 	/// </summary>
 	/// <param name="prefabToInstance">Mapping from prefab GUIDs to instance GUIDs</param>
@@ -66,25 +90,42 @@ internal class PrefabInstanceData
 			return false;
 		}
 
-		var instanceToPrefabMapping = new Dictionary<Guid, Guid>( _instanceRoot.OutermostPrefabInstanceRoot.PrefabInstance._instanceGuidToPrefabGuid );
+		// Only collect GUIDs belonging to this nested instance's subtree instead of
+		// copying the entire outermost dictionary — avoids large allocations and page faults.
+		var relevantInstanceGuids = GetRequiredInstanceGuids( _instanceRoot );
+		var outermostLookup = _instanceRoot.OutermostPrefabInstanceRoot.PrefabInstance._instanceGuidToPrefabGuid;
 
-		// build a mapping all the way back to the original prefab
+		var current = new Dictionary<Guid, Guid>( relevantInstanceGuids.Count );
+		foreach ( var instanceGuid in relevantInstanceGuids )
+		{
+			if ( outermostLookup.TryGetValue( instanceGuid, out var prefabGuid ) )
+				current[instanceGuid] = prefabGuid;
+		}
+
+		// Use a swap-dictionary to avoid .ToArray() allocations each iteration
+		var next = new Dictionary<Guid, Guid>( current.Count );
+		var droppedEntries = 0;
+
+		// Build a mapping all the way back to the original prefab
 		while ( prefabGameObject is not PrefabCacheScene )
 		{
-			// extend mapping
-			foreach ( var (instanceId, prefabId) in instanceToPrefabMapping )
+			var levelLookup = prefabGameObject.OutermostPrefabInstanceRoot.PrefabInstance._instanceGuidToPrefabGuid;
+
+			next.Clear();
+			foreach ( var (instanceId, prefabId) in current )
 			{
-				if ( prefabGameObject.OutermostPrefabInstanceRoot.PrefabInstance._instanceGuidToPrefabGuid.TryGetValue( prefabId, out var outerPrefabId ) )
+				if ( levelLookup.TryGetValue( prefabId, out var outerPrefabId ) )
 				{
-					instanceToPrefabMapping[instanceId] = outerPrefabId;
+					next[instanceId] = outerPrefabId;
 				}
 				else
 				{
-					instanceToPrefabMapping.Remove( instanceId );
+					droppedEntries++;
 				}
 			}
+			(current, next) = (next, current);
 
-			// step up the hierarchy
+			// Step up the hierarchy
 			prefabGameObject = prefabGameObject.OutermostPrefabInstanceRoot.PrefabInstance.FindPrefabGameObjectForInstanceId( prefabGameObject.Id );
 
 			if ( prefabGameObject is null )
@@ -94,10 +135,24 @@ internal class PrefabInstanceData
 			}
 		}
 
-		instanceToPrefabMapping = AddNewObjectsToInstanceToPrefabLookup( _instanceRoot, instanceToPrefabMapping );
-		// invert mapping:
-		var prefabToInstanceMapping = new Dictionary<Guid, Guid>( instanceToPrefabMapping.Count );
-		foreach ( var (instanceId, prefabId) in instanceToPrefabMapping )
+		if ( droppedEntries > 0 )
+		{
+			Log.Warning( $"Dropped {droppedEntries} unresolvable mapping entries while rebuilding nested prefab instance mappings for {_instanceRoot} ({PrefabSource}). Identities for those objects will be re-derived." );
+		}
+
+		// Add any new objects that don't have mappings yet (modifying in-place
+		// since 'current' is already a local dictionary we can mutate).
+		foreach ( var requiredGuid in relevantInstanceGuids )
+		{
+			if ( !current.ContainsKey( requiredGuid ) )
+			{
+				current[requiredGuid] = DeriveInstanceGuid( _instanceRoot.Id, requiredGuid );
+			}
+		}
+
+		// Invert mapping
+		var prefabToInstanceMapping = new Dictionary<Guid, Guid>( current.Count );
+		foreach ( var (instanceId, prefabId) in current )
 		{
 			prefabToInstanceMapping[prefabId] = instanceId;
 		}
@@ -123,6 +178,15 @@ internal class PrefabInstanceData
 	/// </summary>
 	public void RefreshPatch()
 	{
+		var prefabFile = ResourceLibrary.Get<PrefabFile>( PrefabSource );
+
+		// Prefab file is missing or not yet loaded — preserve the last known patch so the scene
+		// can still be saved and round-tripped. The data will be fully restored when the file returns.
+		if ( prefabFile is null || prefabFile.IsPromise || prefabFile.RootObject is null )
+		{
+			Log.Warning( $"Prefab '{PrefabSource}' is missing. Preserving last known patch for serialization." );
+			return;
+		}
 
 		var instanceData = _instanceRoot.SerializeStandard( _serializeOptions );
 
@@ -245,6 +309,7 @@ internal class PrefabInstanceData
 	{
 		// We only want to ignore these basic overrides for overrides targeting the root
 		if ( !_instanceRoot.IsOutermostPrefabInstanceRoot ) return false;
+		if ( _instanceGuidToPrefabGuid.GetValueOrDefault( _instanceRoot.Id ) != propertyPrefabTargetId ) return false;
 
 		propertyName = RemapTransformPropertyName( propertyName );
 		return _ignoredProperties.Contains( propertyName );
@@ -373,6 +438,8 @@ internal class PrefabInstanceData
 	public void UpdateGameObjectFromPrefab( GameObject go, bool revertChanges = false )
 	{
 		var prefabGameObject = FindPrefabGameObjectForInstanceId( go.Id );
+		if ( prefabGameObject is null ) return;
+
 		var prefabGameObjectJson = prefabGameObject.Serialize( new SerializeOptions { SerializePrefabForDiff = true } );
 		var validatedLookup = ValidatePrefabToInstanceIdLookup( _prefabGuidToInstanceGuid, PrefabSource );
 		UpdateLookups( validatedLookup );
@@ -485,7 +552,7 @@ internal class PrefabInstanceData
 	private void PrepareLookupsForPrefabUpdate( GameObject instanceGameObject )
 	{
 		// Update the instance-to-prefab mapping with any new objects
-		_instanceGuidToPrefabGuid = AddNewObjectsToInstanceToPrefabLookup( instanceGameObject, _instanceGuidToPrefabGuid );
+		AddNewObjectsToInstanceToPrefabLookup( instanceGameObject, _instanceGuidToPrefabGuid );
 
 		// Ensure prefab-to-instance mapping is up to date
 		foreach ( var (instanceGuid, prefabGuid) in _instanceGuidToPrefabGuid )
@@ -621,7 +688,7 @@ internal class PrefabInstanceData
 		prefabScene.ToPrefabFile();
 
 		// Previously added PrefabInstances are now nested, so convert them
-		PrefabInstanceData.ConvertAllPrefabInstancesToNested( _instanceRoot );
+		PrefabInstanceData.ConvertChildPrefabInstancesToNested( _instanceRoot );
 
 		// Patch should be empty now
 		ClearPatch( true );
@@ -653,6 +720,8 @@ internal class PrefabInstanceData
 	{
 		_instanceGuidToPrefabGuid.Clear();
 		_prefabGuidToInstanceGuid.Clear();
+		_instanceGuidToPrefabGuid.EnsureCapacity( prefabToInstance.Count );
+		_prefabGuidToInstanceGuid.EnsureCapacity( prefabToInstance.Count );
 		foreach ( var (prefabGuid, instanceGuid) in prefabToInstance )
 		{
 			_instanceGuidToPrefabGuid[instanceGuid] = prefabGuid;
@@ -666,6 +735,7 @@ internal class PrefabInstanceData
 		if ( prefabGuid == Guid.Empty ) return null;
 
 		var prefabScene = GameObject.GetPrefab( PrefabSource );
+		if ( prefabScene is null ) return null;
 
 		return prefabScene.Scene.Directory.FindComponentByGuid( prefabGuid );
 	}
@@ -676,6 +746,7 @@ internal class PrefabInstanceData
 		if ( prefabGuid == Guid.Empty ) return null;
 
 		var prefabScene = GameObject.GetPrefab( PrefabSource );
+		if ( prefabScene is null ) return null;
 
 		return prefabScene.Scene.Directory.FindByGuid( prefabGuid );
 	}
@@ -817,12 +888,12 @@ internal class PrefabInstanceData
 			}
 		}
 
-		// Add missing mappings
+		// Add missing mappings, derived deterministically so they stay stable across loads.
 		foreach ( var requiredObjId in requiredGuids )
 		{
 			if ( !newLookup.ContainsKey( requiredObjId ) )
 			{
-				newLookup.Add( requiredObjId, Guid.NewGuid() );
+				newLookup.Add( requiredObjId, DeriveInstanceGuid( _instanceRoot.Id, requiredObjId ) );
 			}
 		}
 
@@ -834,43 +905,41 @@ internal class PrefabInstanceData
 	/// </summary>
 	private static HashSet<Guid> GetRequiredPrefabGuids( PrefabCacheScene prefabScene )
 	{
-		// Find all GameObjects
-		var requiredGameObjectGuids = prefabScene.Directory.AllGameObjects
-			.Where( gameObject => gameObject.IsValid() && !gameObject.Flags.Contains( GameObjectFlags.NotSaved ) )
-			.Select( gameObject => gameObject.Id );
+		var result = new HashSet<Guid>();
 
-		// Find all Components
-		var requiredComponentGuids = prefabScene.Directory.AllComponents
-			.Where( component => component.IsValid() && !component.Flags.Contains( ComponentFlags.NotSaved ) )
-			.Select( component => component.Id );
+		foreach ( var gameObject in prefabScene.Directory.AllGameObjects )
+		{
+			if ( gameObject.IsValid() && !gameObject.Flags.Contains( GameObjectFlags.NotSaved ) )
+				result.Add( gameObject.Id );
+		}
 
-		return requiredGameObjectGuids
-			.Concat( requiredComponentGuids )
-			.Append( prefabScene.Id )
-			.ToHashSet();
+		foreach ( var component in prefabScene.Directory.AllComponents )
+		{
+			if ( component.IsValid() && !component.Flags.Contains( ComponentFlags.NotSaved ) )
+				result.Add( component.Id );
+		}
+
+		result.Add( prefabScene.Id );
+		return result;
 	}
 
 	/// <summary>
-	/// Adds new GUID mappings to the instance lookup based on the required GUIDs from the given prefab instance root.
+	/// Adds new GUID mappings to the instance lookup in-place for any GUIDs not already present.
 	/// </summary>
-	private static Dictionary<Guid, Guid> AddNewObjectsToInstanceToPrefabLookup( GameObject instanceRoot, Dictionary<Guid, Guid> oldInstanceToPrefabLookup )
+	private static void AddNewObjectsToInstanceToPrefabLookup( GameObject instanceRoot, Dictionary<Guid, Guid> instanceToPrefabLookup )
 	{
-		var newLookup = new Dictionary<Guid, Guid>( oldInstanceToPrefabLookup );
-
-		// Collect all required GUIDs from the prefab scene
+		// Collect all required GUIDs from the instance hierarchy
 		var requiredGuids = GetRequiredInstanceGuids( instanceRoot );
 		Assert.True( requiredGuids.Contains( instanceRoot.Id ) );
 
 		// Add missing mappings
 		foreach ( var requiredObjId in requiredGuids )
 		{
-			if ( !newLookup.ContainsKey( requiredObjId ) )
+			if ( !instanceToPrefabLookup.ContainsKey( requiredObjId ) )
 			{
-				newLookup.Add( requiredObjId, Guid.NewGuid() );
+				instanceToPrefabLookup.Add( requiredObjId, DeriveInstanceGuid( instanceRoot.Id, requiredObjId ) );
 			}
 		}
-
-		return newLookup;
 	}
 
 	/// <summary>
@@ -878,20 +947,22 @@ internal class PrefabInstanceData
 	/// </summary>
 	private static HashSet<Guid> GetRequiredInstanceGuids( GameObject go )
 	{
-		// Find all GameObjects
-		var requiredGameObjectGuids = go.GetAllObjects( false )
-			.Where( gameObject => !gameObject.Flags.Contains( GameObjectFlags.NotSaved ) )
-			.Select( gameObject => gameObject.Id );
+		var result = new HashSet<Guid>();
 
-		// Find all Components
-		var requiredComponentGuids = go.Components.GetAll( FindMode.InSelf | FindMode.InDescendants )
-			.Where( component => !component.Flags.Contains( ComponentFlags.NotSaved ) )
-			.Select( component => component.Id );
+		foreach ( var gameObject in go.GetAllObjects( false ) )
+		{
+			if ( !gameObject.Flags.Contains( GameObjectFlags.NotSaved ) )
+				result.Add( gameObject.Id );
+		}
 
-		return requiredGameObjectGuids
-			.Concat( requiredComponentGuids )
-			.Append( go.Id )
-			.ToHashSet();
+		foreach ( var component in go.Components.GetAll( FindMode.InSelf | FindMode.InDescendants ) )
+		{
+			if ( !component.Flags.Contains( ComponentFlags.NotSaved ) )
+				result.Add( component.Id );
+		}
+
+		result.Add( go.Id );
+		return result;
 	}
 
 	public void ConvertNestedToFullPrefabInstance()
@@ -927,6 +998,10 @@ internal class PrefabInstanceData
 		}
 	}
 
+	/// <summary>
+	/// Converts full prefab instance roots to nested instances, starting at and including <paramref name="go"/>.
+	/// Use after <paramref name="go"/> was written into a prefab and its instances now live inside it.
+	/// </summary>
 	public static void ConvertAllPrefabInstancesToNested( GameObject go )
 	{
 		if ( go.IsOutermostPrefabInstanceRoot )
@@ -935,10 +1010,20 @@ internal class PrefabInstanceData
 		}
 		else
 		{
-			foreach ( var child in go.Children )
-			{
-				ConvertAllPrefabInstancesToNested( child );
-			}
+			ConvertChildPrefabInstancesToNested( go );
+		}
+	}
+
+	/// <summary>
+	/// Converts full prefab instance roots below <paramref name="go"/> to nested instances, excluding
+	/// <paramref name="go"/> itself. Use after applying an instance root back to its prefab: its added
+	/// instances are now part of the prefab, but the root's own relationship to anything above is unchanged.
+	/// </summary>
+	public static void ConvertChildPrefabInstancesToNested( GameObject go )
+	{
+		foreach ( var child in go.Children )
+		{
+			ConvertAllPrefabInstancesToNested( child );
 		}
 	}
 }

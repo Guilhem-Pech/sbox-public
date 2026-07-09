@@ -24,6 +24,28 @@ public sealed partial class SceneCamera : IDisposable, IManagedCamera
 
 	internal Matrix ProjectionMatrix => Frustum.GetProj();
 
+	/// <summary>
+	/// World to projection matrix using the reverse-Z projection (matches the rendered depth buffer:
+	/// far plane = 0, near plane = 1), transposed for row-vector use with <see cref="Matrix.Transform(Vector4)"/>.
+	/// <para>
+	/// The engine's native matrices are column-vector (GPU <c>mul( M, v )</c>) while
+	/// <see cref="Matrix.Transform(Vector4)"/> is row-vector (<c>v · M</c>), so we hand back the transpose.
+	/// Transform a homogeneous world point — <c>matrix.Transform( new Vector4( pos, 1 ) )</c> — to get its
+	/// reverse-Z clip-space coordinate (before the perspective divide).
+	/// </para>
+	/// </summary>
+	internal Matrix ReverseZViewProjectionMatrix => Frustum.GetReverseZViewProjTranspose();
+
+	/// <summary>
+	/// Returns the normalized screen coverage (0-1) of a sphere at the given origin and radius.
+	/// </summary>
+	internal float ComputeScreenSize( Vector3 origin, float radius ) => Frustum.ComputeScreenSize( origin, radius );
+
+	/// <summary>
+	/// Returns the screen width in pixels of a sphere at the given origin and radius.
+	/// </summary>
+	internal float ComputeScreenSizeInPixels( Vector3 origin, float radius ) => Frustum.ComputeScreenSize( origin, radius ) * Size.x;
+
 	public RenderAttributes Attributes { get; }
 
 	/// <summary>
@@ -140,6 +162,12 @@ public sealed partial class SceneCamera : IDisposable, IManagedCamera
 				EngineLoop.DisposeAtFrameEnd( VolumetricFogImpl );
 				VolumetricFogImpl = null;
 			}
+
+			// Release native CStrongHandle copies held by texture tracking
+			// in our RenderAttributes. Without this, the handles survive until
+			// the RenderAttributes finalizer runs which may be after the
+			// resource system has already reported leaks.
+			Attributes?.Clear();
 
 			disposedValue = true;
 		}
@@ -375,7 +403,7 @@ public sealed partial class SceneCamera : IDisposable, IManagedCamera
 	/// </summary>
 	public bool WireframeMode
 	{
-		get => Attributes.GetInt( "Wireframe" ) > 1;
+		get => Attributes.GetInt( "Wireframe" ) >= 1;
 		set => Attributes.Set( "Wireframe", value ? 1 : 0 );
 	}
 
@@ -434,6 +462,19 @@ public sealed partial class SceneCamera : IDisposable, IManagedCamera
 	/// Should this camera render engine overlays, you'd only want this on the main camera.
 	/// </summary>
 	internal bool EnableEngineOverlays { get; set; } = false;
+
+	/// <summary>
+	/// Whether the UI stage layer should be created for this camera render.
+	/// When false, the native pipeline will skip the UI layer entirely.
+	/// </summary>
+	internal bool RenderUI { get; set; } = true;
+
+	/// <summary>
+	/// When true, rendering from this camera won't request higher mip levels from
+	/// the texture streaming system. Used by cubemap rendering to prevent envmap probes
+	/// from pulling in full-resolution textures across the entire map.
+	/// </summary>
+	internal bool ExcludeFromTextureStreaming { get; set; }
 
 	private static WeakReference<SceneCamera> _recordingCamera;
 
@@ -503,23 +544,19 @@ public sealed partial class SceneCamera : IDisposable, IManagedCamera
 
 	void IManagedCamera.OnRenderStage( Rendering.Stage renderStage )
 	{
-		// legacy stuff isn't thread safe
-		if ( ThreadSafe.IsMainThread )
+		switch ( renderStage )
 		{
-			switch ( renderStage )
-			{
-				case Rendering.Stage.AfterPostProcess:
-					{
-						OnRenderOverlay?.Invoke();
-						break;
-					}
+			case Rendering.Stage.AfterPostProcess:
+				{
+					OnRenderOverlay?.Invoke();
+					break;
+				}
 
-				case Rendering.Stage.AfterUI:
-					{
-						OnRenderUI?.Invoke();
-						break;
-					}
-			}
+			case Rendering.Stage.AfterUI:
+				{
+					OnRenderUI?.Invoke();
+					break;
+				}
 		}
 
 		// new stuff is commandlist based, so is total thread safe
@@ -567,6 +604,9 @@ public sealed partial class SceneCamera : IDisposable, IManagedCamera
 	/// </summary>
 	public Ray GetRay( Vector2 cursorPosition, Vector3 screenSize )
 	{
+		if ( screenSize.x <= 0.0f || screenSize.y <= 0.0f )
+			return new Ray( Position, Rotation.Forward );
+
 		if ( !Ortho )
 		{
 			var aspect = screenSize.x / screenSize.y;
@@ -939,4 +979,8 @@ public enum SceneCameraDebugMode
 	Overdraw = 101,
 	[Title( "Ambient Occlusion" ), Icon( "radio_button_checked" )]
 	AmbientOcclusion = 14,
+	[Title( "Motion Vectors" ), Icon( "animation" )]
+	MotionVectors = 102,
+	[Title( "Reactive Mask" ), Icon( "shield" )]
+	ReactiveMask = 103,
 }

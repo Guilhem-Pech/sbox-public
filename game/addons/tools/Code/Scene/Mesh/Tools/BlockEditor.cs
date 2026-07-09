@@ -3,7 +3,7 @@
 /// <summary>
 /// Create stuff as long as it fits in a box, woah crazy.
 /// </summary>
-[Title( "Block" ), Icon( "view_in_ar" )]
+[Title( "Block" ), Icon( "meshtools/primitve_tools/block.png" )]
 public sealed class BlockEditor( PrimitiveTool tool ) : PrimitiveEditor( tool )
 {
 	PrimitiveBuilder _primitive = EditorTypeLibrary.Create<PrimitiveBuilder>( nameof( BlockPrimitive ) );
@@ -11,10 +11,12 @@ public sealed class BlockEditor( PrimitiveTool tool ) : PrimitiveEditor( tool )
 
 	BBox? _box;
 	BBox _startBox;
-	BBox _deltaBox;
 	Vector3 _dragStartPos;
 	bool _dragStarted;
 	Model _previewModel;
+	bool _resizeDragging;
+	BBox _resizeBefore;
+	int _undoStartCount;
 
 	static float TextSize => 22 * Gizmo.Settings.GizmoScale * Application.DpiScale;
 
@@ -56,6 +58,8 @@ public sealed class BlockEditor( PrimitiveTool tool ) : PrimitiveEditor( tool )
 
 	public override void OnCreated( MeshComponent component )
 	{
+		PopUndo();
+
 		var selection = SceneEditorSession.Active.Selection;
 		selection.Set( component.GameObject );
 
@@ -83,6 +87,17 @@ public sealed class BlockEditor( PrimitiveTool tool ) : PrimitiveEditor( tool )
 				tr.EndPosition = point;
 			}
 		}
+		else if ( tr.Component is MeshComponent mesh && mesh.Mesh is not null )
+		{
+			var face = mesh.Mesh.TriangleToFace( tr.Triangle );
+			if ( face.IsValid )
+			{
+				mesh.Mesh.ComputeFaceNormal( face, out var localNormal );
+				var center = mesh.WorldTransform.PointToWorld( mesh.Mesh.GetFaceCenter( face ) );
+				tr.Normal = mesh.WorldTransform.NormalToWorld( localNormal );
+				tr.EndPosition = new Plane( center, tr.Normal ).SnapToPlane( tr.EndPosition );
+			}
+		}
 
 		if ( !tr.Hit ) return;
 
@@ -100,6 +115,7 @@ public sealed class BlockEditor( PrimitiveTool tool ) : PrimitiveEditor( tool )
 
 			_box = null;
 			_dragStarted = true;
+			_undoStartCount = SceneEditorSession.Active.UndoSystem.Back.Count;
 		}
 		else
 		{
@@ -128,10 +144,14 @@ public sealed class BlockEditor( PrimitiveTool tool ) : PrimitiveEditor( tool )
 				return;
 			}
 
+			var before = _box;
+
 			_box = new BBox( _dragStartPos, point + Vector3.Up * s_lastHeight );
 			_dragStarted = false;
 
 			BuildPreview();
+
+			PushUndo( "Create Preview Block", before, _box );
 		}
 		else
 		{
@@ -193,8 +213,11 @@ public sealed class BlockEditor( PrimitiveTool tool ) : PrimitiveEditor( tool )
 
 	void Cancel()
 	{
+		PopUndo();
+
 		_box = null;
 		_dragStarted = false;
+		_resizeDragging = false;
 	}
 
 	public override void OnCancel()
@@ -220,15 +243,17 @@ public sealed class BlockEditor( PrimitiveTool tool ) : PrimitiveEditor( tool )
 			if ( !Gizmo.Pressed.Any )
 			{
 				_startBox = box;
-				_deltaBox = default;
 			}
 
 			if ( Gizmo.Control.BoundingBox( "Resize", box, out var outBox ) )
 			{
-				_deltaBox.Maxs += outBox.Maxs - box.Maxs;
-				_deltaBox.Mins += outBox.Mins - box.Mins;
+				if ( !_resizeDragging )
+				{
+					_resizeDragging = true;
+					_resizeBefore = _box.Value;
+				}
 
-				box = Gizmo.Snap( _startBox, _deltaBox );
+				box = outBox;
 
 				if ( _primitive.Is2D )
 				{
@@ -249,6 +274,12 @@ public sealed class BlockEditor( PrimitiveTool tool ) : PrimitiveEditor( tool )
 
 				BuildPreview();
 			}
+			else if ( _resizeDragging && !Gizmo.IsLeftMouseDown )
+			{
+				_resizeDragging = false;
+
+				PushUndo( "Resize Block", _resizeBefore, _box );
+			}
 
 			using ( Gizmo.Scope( "Bounds" ) )
 			{
@@ -264,8 +295,10 @@ public sealed class BlockEditor( PrimitiveTool tool ) : PrimitiveEditor( tool )
 
 	static Vector3 GridSnap( Vector3 point, Vector3 normal )
 	{
-		var basis = Rotation.LookAt( normal );
-		return Gizmo.Snap( point * basis.Inverse, new Vector3( 0, 1, 1 ) ) * basis;
+		var n = normal.Normal.Abs();
+		var x = n.x >= n.y && n.x >= n.z;
+		var y = !x && n.y >= n.z;
+		return Gizmo.Snap( point, new Vector3( x ? 0 : 1, y ? 0 : 1, x || y ? 1 : 0 ) );
 	}
 
 	public override Widget CreateWidget()
@@ -277,6 +310,24 @@ public sealed class BlockEditor( PrimitiveTool tool ) : PrimitiveEditor( tool )
 	{
 		var mesh = Build();
 		_previewModel = mesh?.Rebuild();
+	}
+
+	void PushUndo( string name, BBox? before, BBox? after )
+	{
+		if ( before == after ) return;
+
+		PushUndo( name,
+			undo: () =>
+			{
+				_box = before;
+				BuildPreview();
+			},
+			redo: () =>
+			{
+				_box = after;
+				BuildPreview();
+			}
+		);
 	}
 
 	private static IEnumerable<TypeDescription> GetBuilderTypes()

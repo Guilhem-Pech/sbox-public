@@ -1,6 +1,5 @@
 ﻿
 using HalfEdgeMesh;
-using System;
 
 namespace Editor.MeshEditor;
 
@@ -47,10 +46,10 @@ partial class EdgeTool
 				var row = new Widget { Layout = Layout.Row() };
 				row.Layout.Spacing = 4;
 
-				CreateButton( "Dissolve", "blur_off", "mesh.dissolve", Dissolve, CanDissolve(), row.Layout );
-				CreateButton( "Collapse", "unfold_less", "mesh.collapse", Collapse, CanCollapse(), row.Layout );
-				CreateButton( "Connect", "link", "mesh.connect", Connect, CanConnect(), row.Layout );
-				CreateButton( "Extend", "call_made", "mesh.extend", Extend, CanExtend(), row.Layout );
+				CreateButton( "Dissolve", "meshtools/edge_tool_button/dissolve.png", "mesh.dissolve", Dissolve, CanDissolve(), row.Layout );
+				CreateButton( "Collapse", "meshtools/edge_tool_button/collapse.png", "mesh.collapse", Collapse, CanCollapse(), row.Layout );
+				CreateButton( "Connect", "meshtools/edge_tool_button/connect_1.png", "mesh.connect", Connect, CanConnect(), row.Layout );
+				CreateButton( "Extend", "meshtools/edge_tool_button/extend.png", "mesh.extend", Extend, CanExtend(), row.Layout );
 
 				row.Layout.AddStretchCell();
 
@@ -63,12 +62,11 @@ partial class EdgeTool
 				var row = new Widget { Layout = Layout.Row() };
 				row.Layout.Spacing = 4;
 
-				CreateButton( "Merge", "merge_type", "mesh.merge", Merge, CanMerge(), row.Layout );
-				CreateButton( "Split", "call_split", "mesh.split", Split, CanSplit(), row.Layout );
-				CreateButton( "Snap Edge to Edge", "compare_arrows", "mesh.snap-edge-to-edge", SnapEdgeToEdge, _edges.Length == 2, row.Layout );
-				CreateButton( "Fill Hole", "format_color_fill", "mesh.fill-hole", FillHole, CanFillHole(), row.Layout );
-				CreateButton( "Bridge", "device_hub", "mesh.bridge-edges", BridgeEdges, CanBridgeEdges(), row.Layout );
-
+				CreateButton( "Merge", "meshtools/edge_tool_button/merge_1.png", "mesh.merge", Merge, CanMerge(), row.Layout );
+				CreateButton( "Split", "meshtools/edge_tool_button/split.png", "mesh.split", Split, CanSplit(), row.Layout );
+				CreateButton( "Snap Edge to Edge", "meshtools/edge_tool_button/snap_edge_to_edge.png", "mesh.snap-edge-to-edge", SnapEdgeToEdge, _edges.Length == 2, row.Layout );
+				CreateButton( "Fill Hole", "meshtools/edge_tool_button/fill_hole.png", "mesh.fill-hole", FillHole, CanFillHole(), row.Layout );
+				CreateButton( "Bridge", "meshtools/edge_tool_button/bridge.png", "mesh.bridge-edges", BridgeEdges, CanBridgeEdges(), row.Layout );
 				row.Layout.AddStretchCell();
 
 				group.Add( row );
@@ -79,9 +77,9 @@ partial class EdgeTool
 				var row = new Widget { Layout = Layout.Row() };
 				row.Layout.Spacing = 4;
 
-				CreateButton( "Hard Normals", "crop_square", "mesh.hard-normals", HardNormals, _edges.Length > 0, row.Layout );
-				CreateButton( "Soft Normals", "blur_on", "mesh.soft-normals", SoftNormals, _edges.Length > 0, row.Layout );
-				CreateButton( "Default Normals", "trip_origin", "mesh.default-normals", DefaultNormals, _edges.Length > 0, row.Layout );
+				CreateButton( "Hard Normals", "meshtools/edge_tool_button/hard_normals.png", "mesh.hard-normals", HardNormals, _edges.Length > 0, row.Layout );
+				CreateButton( "Soft Normals", "meshtools/edge_tool_button/soft_normals.png", "mesh.soft-normals", SoftNormals, _edges.Length > 0, row.Layout );
+				CreateButton( "Default Normals", "meshtools/edge_tool_button/default_normals.png", "mesh.default-normals", DefaultNormals, _edges.Length > 0, row.Layout );
 
 				row.Layout.AddStretchCell();
 
@@ -93,7 +91,7 @@ partial class EdgeTool
 				var row = new Widget { Layout = Layout.Row() };
 				row.Layout.Spacing = 4;
 
-				CreateButton( "Weld UVs", "scatter_plot", "mesh.edge-weld-uvs", WeldUVs, _edges.Length > 0, row.Layout );
+				CreateButton( "Weld UVs", "meshtools/edge_tool_button/weld_uvs.png", "mesh.edge-weld-uvs", WeldUVs, _edges.Length > 0, row.Layout );
 
 				row.Layout.AddStretchCell();
 
@@ -105,9 +103,10 @@ partial class EdgeTool
 				var row = new Widget { Layout = Layout.Row() };
 				row.Layout.Spacing = 4;
 
-				CreateButton( "Select Loop", "all_out", "mesh.select-loop", SelectLoop, CanSelectLoop(), row.Layout );
-				CreateButton( "Select Ring", "data_array", "mesh.select-ring", SelectRing, CanSelectRing(), row.Layout );
-				CreateButton( "Select Ribs", "timeline", "mesh.select-ribs", SelectRibs, CanSelectRibs(), row.Layout );
+				CreateButton( "Select Loop", "meshtools/edge_tool_button/select_loop.png", "mesh.select-loop", SelectLoop, CanSelectLoop(), row.Layout );
+				CreateButton( "Select Ring", "meshtools/edge_tool_button/select_ring.png", "mesh.select-ring", SelectRing, CanSelectRing(), row.Layout );
+				CreateButton( "Select Ribs", "meshtools/edge_tool_button/select_ribs.png", "mesh.select-ribs", SelectRibs, CanSelectRibs(), row.Layout );
+				CreateButton( "Select Path", "meshtools/edge_tool_button/select_path.png", "mesh.select-path", SelectPath, CanSelectPath(), row.Layout );
 
 				row.Layout.AddStretchCell();
 
@@ -121,9 +120,10 @@ partial class EdgeTool
 					var row = new Widget { Layout = Layout.Row() };
 					row.Layout.Spacing = 4;
 
-					CreateButton( "Bevel", "straighten", "mesh.edge-bevel", Bevel, CanBevel(), row.Layout );
-					CreateButton( "Edge Cut Tool", "content_cut", "mesh.edge-cut-tool", OpenEdgeCutTool, true, row.Layout );
-					CreateButton( "Edge Arch", "rounded_corner", "mesh.edge-arch-tool", OpenEdgeArchTool, CanArch(), row.Layout );
+					CreateButton( "Bevel", "meshtools/edge_tool_button/bevel_1.png", "mesh.edge-bevel", Bevel, CanBevel(), row.Layout );
+					CreateButton( "Edge Cut Tool", "meshtools/edge_tool_button/edge_cut_tool_1.png", "mesh.edge-cut-tool", OpenEdgeCutTool, true, row.Layout );
+					CreateButton( "Edge Arch", "meshtools/edge_tool_button/edge_arch.png", "mesh.edge-arch-tool", OpenEdgeArchTool, CanArch(), row.Layout );
+					CreateButton( "Bridge", "meshtools/face_tool/bridge_1.png", "mesh.bridge-tool", OpenBridgeTool, CanBridgeEdges(), row.Layout );
 
 					row.Layout.AddStretchCell();
 
@@ -136,7 +136,7 @@ partial class EdgeTool
 
 					var numCutsControl = ControlWidget.Create( this.GetSerialized().GetProperty( nameof( NumCuts ) ) );
 					numCutsControl.FixedHeight = Theme.ControlHeight;
-					CreateButton( "Quick Bevel", "carpenter", "mesh.edge-quick-bevel", QuickBevel, CanBevel(), row.Layout );
+					CreateButton( "Quick Bevel", "meshtools/edge_tool_button/quick_bevel.png", "mesh.edge-quick-bevel", QuickBevel, CanBevel(), row.Layout );
 					row.Layout.Add( numCutsControl );
 
 					row.Layout.AddStretchCell();
@@ -146,6 +146,49 @@ partial class EdgeTool
 			}
 
 			Layout.AddStretchCell();
+
+			AddShortcuts(
+				("Loop Select", "Double Click"),
+				("Path Select", "Shift + Double Click"),
+				("Lasso Select", "Alt+Shift+Drag"),
+				("Lasso Deselect", "Alt+Ctrl+Drag"),
+				("Grow Selection", "Numpad +"),
+				("Shrink Selection", "Numpad -")
+			);
+		}
+
+		[Shortcut( "mesh.bridge-tool", "ALT+B", typeof( SceneViewWidget ) )]
+		void OpenBridgeTool()
+		{
+			if ( !CanBridgeEdges() )
+				return;
+
+			var tool = new BridgeTool( _edges );
+			tool.Manager = _tool.Manager;
+			_tool.CurrentTool = tool;
+		}
+
+		[Shortcut( "mesh.select-all", "CTRL+A", typeof( SceneViewWidget ) )]
+		private void SelectAll()
+		{
+			using var scope = SceneEditorSession.Scope();
+			using var undoScope = SceneEditorSession.Active.UndoScope( "Select All Edges" ).Push();
+
+			var selection = SceneEditorSession.Active.Selection;
+			selection.Clear();
+
+			foreach ( var edgeGroup in _edgeGroups )
+			{
+				var edges = edgeGroup.Key.Mesh.HalfEdgeHandles;
+
+				foreach ( var edge in edges )
+				{
+					if ( edge.Index > edgeGroup.Key.Mesh.GetOppositeHalfEdge( edge ).Index )
+						continue;
+
+					selection.Add( new MeshEdge( edgeGroup.Key, edge ) );
+				}
+			}
 		}
 
 		[Shortcut( "mesh.edge-cut-tool", "C", typeof( SceneViewWidget ) )]
@@ -295,22 +338,17 @@ partial class EdgeTool
 
 		private bool CanMerge()
 		{
-			if ( _edges.Length != 2 )
+			if ( _edges.Length < 2 )
 				return false;
 
-			var edgeA = _edges[0];
-			if ( !edgeA.IsValid() )
-				return false;
+			foreach ( var edge in _edges )
+			{
+				if ( !edge.IsValid() )
+					return false;
 
-			var edgeB = _edges[1];
-			if ( !edgeB.IsValid() )
-				return false;
-
-			if ( !edgeA.IsOpen )
-				return false;
-
-			if ( !edgeB.IsOpen )
-				return false;
+				if ( !edge.IsOpen )
+					return false;
+			}
 
 			return true;
 		}
@@ -341,32 +379,94 @@ partial class EdgeTool
 
 			using var scope = SceneEditorSession.Scope();
 
-			var edgeA = _edges[0];
-			var edgeB = _edges[1];
-
-			var undoScope = SceneEditorSession.Active.UndoScope( "Merge Edges" );
-
-			if ( edgeA.Component != edgeB.Component )
+			if ( _edges.Length == 2 )
 			{
-				undoScope = undoScope.WithComponentChanges( edgeA.Component )
-					.WithGameObjectDestructions( edgeB.Component.GameObject );
-			}
-			else
-			{
-				undoScope = undoScope.WithComponentChanges( [edgeA.Component, edgeB.Component] );
-			}
+				var edgeA = _edges[0];
+				var edgeB = _edges[1];
 
-			using ( undoScope.Push() )
-			{
-				edgeB = MergeMeshesOfEdges( edgeA, edgeB );
-				var mesh = edgeA.Component.Mesh;
+				var undoScope = SceneEditorSession.Active.UndoScope( "Merge Edges" );
 
-				if ( mesh.MergeEdges( edgeA.Handle, edgeB.Handle, out var hEdge ) )
+				if ( edgeA.Component != edgeB.Component )
 				{
-					mesh.ComputeFaceTextureCoordinatesFromParameters();
+					undoScope = undoScope.WithComponentChanges( edgeA.Component )
+						.WithGameObjectDestructions( edgeB.Component.GameObject );
+				}
+				else
+				{
+					undoScope = undoScope.WithComponentChanges( [edgeA.Component, edgeB.Component] );
+				}
 
-					var selection = SceneEditorSession.Active.Selection;
-					selection.Set( new MeshEdge( edgeA.Component, hEdge ) );
+				using ( undoScope.Push() )
+				{
+					edgeB = MergeMeshesOfEdges( edgeA, edgeB );
+					var mesh = edgeA.Component.Mesh;
+
+					if ( mesh.MergeEdges( edgeA.Handle, edgeB.Handle, out var hEdge ) )
+					{
+						var selection = SceneEditorSession.Active.Selection;
+						selection.Set( new MeshEdge( edgeA.Component, hEdge ) );
+					}
+				}
+
+				return;
+			}
+
+			var target = _components[0];
+			var vertexSet = new HashSet<VertexHandle>();
+			var vertices = new List<VertexHandle>();
+
+			using ( SceneEditorSession.Active.UndoScope( "Merge Edges" )
+				.WithComponentChanges( _components )
+				.WithGameObjectDestructions( _components.Skip( 1 ).Select( x => x.GameObject ).ToList() )
+				.Push() )
+			{
+				foreach ( var group in _edgeGroups )
+				{
+					Dictionary<VertexHandle, VertexHandle> remapVertices = null;
+					var sourceMesh = group.Key.Mesh;
+
+					if ( group.Key != target )
+					{
+						var transform = target.WorldTransform.ToLocal( group.Key.WorldTransform );
+						target.Mesh.MergeMesh( sourceMesh, transform, out remapVertices, out _, out _ );
+					}
+
+					foreach ( var edge in group )
+					{
+						sourceMesh.GetEdgeVertices( edge.Handle, out var a, out var b );
+
+						if ( remapVertices != null ) { a = remapVertices[a]; b = remapVertices[b]; }
+
+						if ( vertexSet.Add( a ) ) vertices.Add( a );
+						if ( vertexSet.Add( b ) ) vertices.Add( b );
+					}
+
+					if ( group.Key != target )
+					{
+						group.Key.DestroyGameObject();
+					}
+				}
+
+				var selection = SceneEditorSession.Active.Selection;
+				selection.Clear();
+
+				var resultVertices = target.Mesh.MergeVerticesWithinDistance( vertices, 0.1f, false, false, out var finalVertices ) > 0 ? finalVertices : vertices;
+
+				var resultVertexSet = new HashSet<VertexHandle>( resultVertices );
+				var addedEdges = new HashSet<int>();
+				foreach ( var hVertex in resultVertices )
+				{
+					target.Mesh.GetEdgesConnectedToVertex( hVertex, out var edges );
+					foreach ( var hEdge in edges )
+					{
+						target.Mesh.GetEdgeVertices( hEdge, out var a, out var b );
+						if ( !resultVertexSet.Contains( a ) || !resultVertexSet.Contains( b ) )
+							continue;
+
+						var canonical = Math.Min( hEdge.Index, target.Mesh.GetOppositeHalfEdge( hEdge ).Index );
+						if ( addedEdges.Add( canonical ) )
+							selection.Add( new MeshEdge( target, hEdge ) );
+					}
 				}
 			}
 		}
@@ -496,52 +596,80 @@ partial class EdgeTool
 			}
 		}
 
-		[Shortcut( "mesh.bridge-edges", "ALT+B", typeof( SceneViewWidget ) )]
-		private void BridgeEdges()
+		[Shortcut( "mesh.bridge-edges", "B", typeof( SceneViewWidget ) )]
+		void BridgeEdges()
 		{
 			if ( !CanBridgeEdges() )
 				return;
 
 			using var scope = SceneEditorSession.Scope();
 
-			var edgeA = _edges[0];
-			var edgeB = _edges[1];
+			var groups = _edges.GroupBy( e => e.Component ).ToList();
+			if ( groups.Count == 2 && groups[0].Count() != groups[1].Count() )
+				return;
 
-			using ( SceneEditorSession.Active.UndoScope( "Bridge Edges" )
-				.WithComponentChanges( [edgeA.Component, edgeB.Component] )
-				.Push() )
+			var undo = SceneEditorSession.Active.UndoScope( "Bridge Edges" )
+				.WithComponentChanges( groups[0].Key );
+
+			if ( groups.Count == 2 )
+				undo = undo.WithGameObjectDestructions( groups[1].Key.GameObject );
+
+			using ( undo.Push() )
 			{
-				if ( edgeA.Component.Mesh.BridgeEdges( edgeA.Handle, edgeB.Handle, out var hFace ) )
+				if ( groups.Count == 2 )
 				{
-					var selection = SceneEditorSession.Active.Selection;
-					selection.Clear();
+					var compA = groups[0].Key;
+					var compB = groups[1].Key;
+
+					var meshA = compA.Mesh;
+					var meshB = compB.Mesh;
+
+					var edgesA = groups[0].Select( e => e.Handle ).ToList();
+					var edgesB = groups[1].Select( e => e.Handle ).ToList();
+
+					var transform = compA.WorldTransform.ToLocal( compB.WorldTransform );
+					meshA.MergeMesh( meshB, transform, out _, out var remapEdges, out _ );
+
+					for ( int i = 0; i < edgesB.Count; i++ )
+						edgesB[i] = remapEdges[edgesB[i]];
+
+					compB.DestroyGameObject();
+
+					meshA.BridgeEdges( edgesA, edgesB );
+				}
+				else
+				{
+					var comp = groups[0].Key;
+					var mesh = comp.Mesh;
+
+					var edges = groups[0].Select( e => e.Handle ).ToList();
+
+					mesh.FindOpenEdgeIslands( edges, out var fullIslands );
+
+					if ( fullIslands.Count == 2 )
+					{
+						mesh.BridgeEdges( fullIslands[0], fullIslands[1] );
+					}
+					else if ( edges.Count == 2 )
+					{
+						mesh.BridgeEdges( edges[0], edges[1], out _ );
+					}
 				}
 			}
 		}
-
-		private bool CanBridgeEdges()
+		bool CanBridgeEdges()
 		{
-			if ( _edges.Length != 2 )
+			if ( _edges.Length < 2 )
 				return false;
 
-			var edgeA = _edges[0];
-			if ( !edgeA.IsValid() )
+			var groups = _edges.GroupBy( e => e.Component ).ToList();
+			if ( groups.Count is < 1 or > 2 )
 				return false;
 
-			var edgeB = _edges[1];
-			if ( !edgeB.IsValid() )
+			if ( _edges.Any( e => !e.IsValid() || !e.IsOpen ) )
 				return false;
 
-			if ( edgeA.Component != edgeB.Component )
-				return false;
-
-			if ( !edgeA.IsOpen )
-				return false;
-
-			if ( !edgeB.IsOpen )
-				return false;
-
-			return true;
+			return groups.Count != 2 || groups[0].Count() == groups[1].Count();
 		}
 
 		private bool CanDissolve()
@@ -720,6 +848,31 @@ partial class EdgeTool
 					foreach ( var hNewEdge in edgeLoop )
 						selection.Add( new MeshEdge( group.Key, hNewEdge ) );
 				}
+			}
+		}
+
+		private bool CanSelectPath()
+		{
+			return _edges.Length == 2 && _edges[0].Component == _edges[1].Component;
+		}
+
+		[Shortcut( "mesh.select-path", "CTRL+L", typeof( SceneViewWidget ) )]
+		private void SelectPath()
+		{
+			if ( !CanSelectPath() )
+				return;
+
+			var path = FindShortestEdgePath( _edges[0], _edges[1] );
+			if ( path is null || path.Count == 0 )
+				return;
+
+			using var scope = SceneEditorSession.Scope();
+
+			using ( SceneEditorSession.Active.UndoScope( "Select Edge Path" ).Push() )
+			{
+				var selection = SceneEditorSession.Active.Selection;
+				foreach ( var edge in path )
+					selection.Add( edge );
 			}
 		}
 

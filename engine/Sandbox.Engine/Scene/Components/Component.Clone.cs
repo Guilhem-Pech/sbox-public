@@ -1,5 +1,6 @@
-﻿using System.Text.Json.Nodes;
-using Facepunch.ActionGraphs;
+﻿using Facepunch.ActionGraphs;
+using System.Linq.Expressions;
+using System.Text.Json.Nodes;
 
 namespace Sandbox;
 
@@ -77,13 +78,30 @@ internal static class CloneHelpers
 
 		if ( member is PropertyDescription prop )
 		{
-			originalValue = prop.GetValue( original );
 			valueType = prop.PropertyType;
+
+			// Fast path: value types that are safe to copy by value are transferred via a pre-compiled
+			// delegate, avoiding the boxing allocation that PropertyInfo.GetValue would cause.
+			if ( valueType.IsValueType && ReflectionQueryCache.IsTypeCloneableByCopy( valueType ) )
+			{
+				MemberCopyCache.CopyTo( prop, original, target );
+				return;
+			}
+
+			originalValue = prop.GetValue( original );
 		}
 		else if ( member is FieldDescription field )
 		{
-			originalValue = field.GetValue( original );
 			valueType = field.FieldType;
+
+			// Fast path: same as above for fields.
+			if ( valueType.IsValueType && ReflectionQueryCache.IsTypeCloneableByCopy( valueType ) )
+			{
+				MemberCopyCache.CopyTo( field, original, target );
+				return;
+			}
+
+			originalValue = field.GetValue( original );
 		}
 		else
 		{
@@ -92,8 +110,12 @@ internal static class CloneHelpers
 
 		if ( originalValue is null || ReflectionQueryCache.IsTypeCloneableByCopy( valueType ) )
 		{
-			SetMemberValue( member, target, originalValue );
-			return;
+			// Embedded resources are deep-copied to carry any inline generator data over, only when in the editor.
+			if ( !Application.IsEditor || !ReflectionQueryCache.IsInlineEmbeddedResource( originalValue, valueType ) )
+			{
+				SetMemberValue( member, target, originalValue );
+				return;
+			}
 		}
 
 		// If the original object has already been cloned simply point to it.
@@ -105,6 +127,17 @@ internal static class CloneHelpers
 		if ( isGameObjectorComponent && !isPrefabReference && originalToClonedObject.TryGetValue( originalValue, out var existingClone ) )
 		{
 			SetMemberValue( member, target, existingClone );
+			return;
+		}
+
+		// Fast path: if the type implements ICloneable and is not a BCL/system type (whose Clone()
+		// is only a shallow copy that would silently skip GUID rewiring), call Clone() directly
+		// to avoid the JSON roundtrip overhead.
+		// Only when the member is assignable: SetMemberValue no-ops on get-only properties (e.g.
+		// Renderer.RenderOptions) and would drop the clone, so those fall through to the JSON path.
+		if ( originalValue is ICloneable cloneable && ReflectionQueryCache.IsICloneableSafe( valueType ) && IsMemberAssignable( member ) )
+		{
+			SetMemberValue( member, target, cloneable.Clone() );
 			return;
 		}
 
@@ -129,6 +162,23 @@ internal static class CloneHelpers
 
 			SetMemberValue( member, target, clonedValue );
 		}
+	}
+
+	/// <summary>
+	/// Whether <see cref="SetMemberValue"/> can write this member. Mirrors the setter guard in <see cref="PropertyDescription.SetValue"/>.
+	/// </summary>
+	private static bool IsMemberAssignable( MemberDescription member )
+	{
+		if ( member is not PropertyDescription prop )
+			return true;
+
+		if ( prop.PropertyInfo.SetMethod is null )
+			return false;
+
+		if ( !prop.TypeDescription.IsDynamicAssembly && (!prop.IsSetMethodPublic || prop.IsSetMethodInitOnly) )
+			return false;
+
+		return true;
 	}
 
 	private static void SetMemberValue(
@@ -158,5 +208,80 @@ internal static class CloneHelpers
 
 			return updatedGuid;
 		} );
+	}
+}
+
+/// <summary>
+/// Caches pre-compiled expression-tree delegates that copy a single member's value directly
+/// from source to target without boxing. Only used for value types that are safe to clone by copy.
+/// Cleared via <see cref="ReflectionQueryCache.ClearTypeCache"/> after hotload and game close.
+/// </summary>
+internal static class MemberCopyCache
+{
+	// Compiled expression delegates come from cant be upgraded via hot upload -> skip.
+	// The cache is still cleared explicitly via ReflectionQueryCache.ClearTypeCache() during hotload.
+	[SkipHotload]
+	private static readonly Dictionary<MemberDescription, Action<object, object>> _cache = new();
+
+	internal static bool IsEmpty => _cache.Count == 0;
+
+	internal static void Clear() => _cache.Clear();
+
+	internal static void CopyTo( PropertyDescription prop, object source, object target )
+	{
+		if ( !_cache.TryGetValue( prop, out var del ) )
+		{
+			del = BuildPropertyDelegate( prop );
+			_cache[prop] = del;
+		}
+
+		del( source, target );
+	}
+
+	internal static void CopyTo( FieldDescription field, object source, object target )
+	{
+		if ( !_cache.TryGetValue( field, out var del ) )
+		{
+			del = BuildFieldDelegate( field );
+			_cache[field] = del;
+		}
+
+		del( source, target );
+	}
+
+	private static Action<object, object> BuildPropertyDelegate( PropertyDescription prop )
+	{
+		var propInfo = prop.PropertyInfo;
+		var declaringType = propInfo.DeclaringType;
+
+		if ( propInfo.SetMethod is null )
+			return static ( _, _ ) => { };
+
+		// Mirror the same access guard as PropertyDescription.SetValue:
+		// engine types must not write to non-public or init-only setters.
+		if ( !prop.TypeDescription.IsDynamicAssembly && (!prop.IsSetMethodPublic || prop.IsSetMethodInitOnly) )
+			return static ( _, _ ) => { };
+
+		var sourceParam = Expression.Parameter( typeof( object ), "source" );
+		var targetParam = Expression.Parameter( typeof( object ), "target" );
+
+		var getExpr = Expression.Property( Expression.Convert( sourceParam, declaringType ), propInfo );
+		var setExpr = Expression.Call( Expression.Convert( targetParam, declaringType ), propInfo.SetMethod, getExpr );
+
+		return Expression.Lambda<Action<object, object>>( setExpr, sourceParam, targetParam ).Compile();
+	}
+
+	private static Action<object, object> BuildFieldDelegate( FieldDescription field )
+	{
+		var fieldInfo = field.FieldInfo;
+		var declaringType = fieldInfo.DeclaringType;
+
+		var sourceParam = Expression.Parameter( typeof( object ), "source" );
+		var targetParam = Expression.Parameter( typeof( object ), "target" );
+
+		var getExpr = Expression.Field( Expression.Convert( sourceParam, declaringType ), fieldInfo );
+		var setExpr = Expression.Assign( Expression.Field( Expression.Convert( targetParam, declaringType ), fieldInfo ), getExpr );
+
+		return Expression.Lambda<Action<object, object>>( setExpr, sourceParam, targetParam ).Compile();
 	}
 }

@@ -8,7 +8,39 @@ public partial class Scene : GameObject
 {
 	public bool IsEditor { get; private set; }
 
-	public SceneWorld SceneWorld { get; private set; }
+	bool _destroyed;
+	SceneWorld _sceneWorld;
+
+	/// <summary>
+	/// True if the scene world has been created. Reading <see cref="SceneWorld"/> creates
+	/// it - check this first when you only want to act on a world that already exists.
+	/// </summary>
+	internal bool HasSceneWorld => _sceneWorld is not null;
+
+	/// <summary>
+	/// True if the physics world has been created. Reading <see cref="PhysicsWorld"/> creates
+	/// it - check this first when you only want to act on a world that already exists.
+	/// </summary>
+	internal bool HasPhysicsWorld => _physicsWorld.IsValid();
+
+	/// <summary>
+	/// The scene world, holding this scene's renderables. Created on first access, so
+	/// scenes that never render anything (like prefab caches or tests) never create one.
+	/// </summary>
+	public SceneWorld SceneWorld
+	{
+		get
+		{
+			if ( _sceneWorld is null && !_destroyed )
+			{
+				_sceneWorld = new SceneWorld();
+			}
+
+			return _sceneWorld;
+		}
+		private set => _sceneWorld = value;
+	}
+
 	public SceneWorld DebugSceneWorld => gizmoInstance?.World;
 
 	[System.Obsolete( "Use Scene.Editor.HasUnsavedChanges" )]
@@ -52,7 +84,7 @@ public partial class Scene : GameObject
 
 	private PhysicsWorld CreatePhysicsWorld()
 	{
-		return new PhysicsWorld
+		var world = new PhysicsWorld
 		{
 			DebugSceneWorld = DebugSceneWorld,
 			Gravity = Vector3.Down * 850,
@@ -60,13 +92,17 @@ public partial class Scene : GameObject
 			CollisionRules = ProjectSettings.Collision,
 			Scene = this
 		};
+
+		// the physics system steps the world and forwards its collision events
+		GetSystem<ScenePhysicsSystem>()?.OnPhysicsWorldCreated( world );
+
+		return world;
 	}
 
 	protected Scene( bool isEditor ) : base( true, "Scene" )
 	{
 		_all.Add( this );
 
-		SceneWorld = new SceneWorld();
 		Directory = new GameObjectDirectory( this );
 
 		RenderAttributes = new();
@@ -88,7 +124,7 @@ public partial class Scene : GameObject
 	/// <summary>
 	/// Returns true if this scene has not been destroyed
 	/// </summary>
-	public override bool IsValid => SceneWorld is not null;
+	public override bool IsValid => !_destroyed;
 
 	/// <summary>
 	/// Destroy this scene. After this you should never use it again.
@@ -114,6 +150,10 @@ public partial class Scene : GameObject
 		ShutdownSystems();
 
 		GC.SuppressFinalize( this );
+
+		// the lazy world properties stop creating once this is set, so tearing
+		// down a world that was never created stays a no-op
+		_destroyed = true;
 
 		_physicsWorld?.Delete();
 		_physicsWorld = default;
@@ -155,27 +195,7 @@ public partial class Scene : GameObject
 	/// </summary>
 	public IDisposable Push()
 	{
-		ThreadSafe.AssertIsMainThread();
-		var old = Game.ActiveScene;
-
-		Game.ActiveScene = this;
-
-#pragma warning disable CA2000 // Dispose objects before losing scope
-		// Disposed in DisposeAction
-		var timeScope = Time.Scope( TimeNow, TimeDelta );
-#pragma warning restore CA2000 // Dispose objects before losing scope
-
-		return DisposeAction.Create( () =>
-		{
-			ThreadSafe.AssertIsMainThread();
-
-			if ( Game.ActiveScene == this )
-			{
-				Game.ActiveScene = old;
-			}
-
-			timeScope?.Dispose();
-		} );
+		return new ScenePushScope( this );
 	}
 
 	/// <summary>
@@ -226,8 +246,13 @@ public partial class Scene : GameObject
 		HotloadObjectIndex();
 	}
 
+	static Superluminal _renderTimer = new Superluminal( "Scene.Render", Color.Cyan );
+	static Superluminal _cameraRenderTimer = new Superluminal( "Camera", Color.Cyan );
+
 	internal void Render( SwapChainHandle_t swapChain, Vector2? size )
 	{
+		using var _renderScope = _renderTimer.Start();
+
 		PreCameraRender();
 
 		// Get all cameras sorted by render priority
@@ -237,6 +262,7 @@ public partial class Scene : GameObject
 			if ( cc.Active == false ) continue;
 			if ( cc.IsSceneEditorCamera ) continue;
 
+			using var _cam = _cameraRenderTimer.Start( cc.GameObject?.Name );
 			cc.AddToRenderList( swapChain, size );
 		}
 	}
@@ -250,8 +276,8 @@ public partial class Scene : GameObject
 			return;
 		}
 
-		// Don't update all at once to not overflow transform buffer in large scenes
-		const int maxSimultaniousUpdates = 5;
+		// We pre-render envmaps, we dont need to render them parallelly in a frame anymore, this can cause transform buffers and descriptor sets to balloon in complex scenes and cause crashes.
+		const int maxSimultaniousUpdates = 1;
 		foreach ( var envmap in GetAllComponents<EnvmapProbe>().Where( x => x.Dirty ).Take( maxSimultaniousUpdates ) )
 		{
 			envmap.RenderCubemap();
@@ -352,5 +378,41 @@ public partial class Scene : GameObject
 	public IEnumerable<GameObject> FindAllWithTag( string tag )
 	{
 		return Directory.AllGameObjects.Where( x => x.Tags.Has( tag ) );
+	}
+}
+
+/// <summary>
+/// Allocation-free scope returned by <see cref="Scene.Push"/>.
+/// Use with <c>using var</c> to keep it stack-allocated; storing as <c>IDisposable</c> will box it.
+/// </summary>
+internal struct ScenePushScope : IDisposable
+{
+	Scene _pushed;
+	Scene _prev;
+	double _prevNowDouble;
+	float _prevDelta;
+	float _prevNow;
+
+	internal ScenePushScope( Scene scene )
+	{
+		ThreadSafe.AssertIsMainThread();
+		_pushed = scene;
+		_prev = Game.ActiveScene;
+		_prevNowDouble = Time.NowDouble;
+		_prevDelta = Time.Delta;
+		_prevNow = Time.Now;
+		Game.ActiveScene = scene;
+		Time.Update( scene.TimeNow, scene.TimeDelta );
+	}
+
+	public void Dispose()
+	{
+		if ( _pushed is null ) return;
+		ThreadSafe.AssertIsMainThread();
+		if ( Game.ActiveScene == _pushed ) Game.ActiveScene = _prev;
+		Time.NowDouble = _prevNowDouble;
+		Time.Delta = _prevDelta;
+		Time.Now = _prevNow;
+		_pushed = null;
 	}
 }

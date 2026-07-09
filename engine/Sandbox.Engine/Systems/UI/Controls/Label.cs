@@ -1,4 +1,5 @@
-﻿using Sandbox.Html;
+﻿using Microsoft.AspNetCore.Components;
+using Sandbox.Html;
 using System.Globalization;
 
 namespace Sandbox.UI
@@ -22,8 +23,6 @@ namespace Sandbox.UI
 		int layoutStateHash;
 		bool sizeFinalized;
 		Vector2 availableSpace;
-
-		public override bool HasContent => true;
 
 		[Category( "Selection" )]
 		public bool ShouldDrawSelection
@@ -148,6 +147,7 @@ namespace Sandbox.UI
 		/// <summary>
 		/// Text to display on the label.
 		/// </summary>
+		[Parameter]
 		public virtual string Text
 		{
 			get => _text;
@@ -176,6 +176,7 @@ namespace Sandbox.UI
 		/// <summary>
 		/// Set to true if this is rich text. This means it can support some inline html elements.
 		/// </summary>
+		[Parameter]
 		public bool IsRich { get; set; }
 
 		public override void SetProperty( string name, string value )
@@ -291,6 +292,7 @@ namespace Sandbox.UI
 			{
 				_textBlock = new TextBlock();
 				_textBlock.LookupStyles = HtmlStyleLookup;
+				_textBlock.OnTextureChanged = MarkRenderDirty;
 			}
 
 			_textBlock.NoWrap = !Multiline;
@@ -319,32 +321,40 @@ namespace Sandbox.UI
 				sizeFinalized = false;
 			}
 		}
+
 		private Styles HtmlStyleLookup( INode node )
 		{
-			if ( node.GetAttribute( "style", null ) is string styles )
-			{
-				Log.Warning( "TODO: Apply Html Styles" );
-			}
+			// Seed with the label's own computed styles so inherited properties are present.
+			// ComputedStyle is already in screen units, so it should never be rescaled.
+			var s = new Styles();
+			s.Add( ComputedStyle );
+
+			// Accumulate stylesheet + inline styles in logical units, scale once, then merge
+			var local = new Styles();
 
 			var blocks = AllStyleSheets
-							.SelectMany( x => x.Nodes )
-							.Select( x => x.Test( node ) )
-							.Where( x => x is not null )
-							.ToList();
+				.SelectMany( x => x.Nodes )
+				.Select( x => x.Test( node ) )
+				.Where( x => x is not null )
+				.ToList();
 
-			if ( blocks.Count == 0 )
-				return null;
-
-			blocks.Sort( StyleOrderer.Instance );
-
-			var s = new Styles();
-
-			foreach ( var entry in blocks )
+			if ( blocks.Count > 0 )
 			{
-				s.Add( entry.Block.Styles );
+				blocks.Sort( StyleOrderer.Instance );
+
+				foreach ( var entry in blocks )
+					local.Add( entry.Block.Styles );
 			}
 
-			s.ApplyScale( FindRootPanel().ScaleToScreen );
+			// Inline styles applied last, highest specificity wins
+			if ( node.GetAttribute( "style", null ) is string styles )
+			{
+				var p = new Parse( styles );
+				StyleParser.ParseStyles( ref p, local );
+			}
+
+			local.ApplyScale( FindRootPanel().ScaleToScreen );
+			s.Add( local );
 
 			return s;
 		}
@@ -387,11 +397,17 @@ namespace Sandbox.UI
 			_textRect.Size = _textBlock.BlockSize;
 		}
 
-		internal override void DrawContent( PanelRenderer renderer, ref RenderState state )
+		public override void OnDraw()
 		{
+			// Ensure texture is created if we have text but no texture yet
+			if ( _textBlock != null && _textBlock.Texture == null && !string.IsNullOrEmpty( _textBlock.Text ) )
+			{
+				_textBlock.SizeFinalized( Box.RectInner.Width, Box.RectInner.Height );
+			}
+
 			var rect = Box.RectInner;
 			rect.Position -= caretScroll;
-			_textBlock?.Render( renderer, ref state, ComputedStyle, rect, Opacity * state.RenderOpacity );
+			_textBlock?.BuildDescriptors( CachedDescriptors, CachedOverrideBlendMode, ComputedStyle, rect, CachedRenderOpacity );
 		}
 
 		public int GetLetterAt( Vector2 pos )
@@ -463,31 +479,49 @@ namespace Sandbox.UI
 			SetNeedsPreLayout();
 		}
 
+		/// <summary>
+		/// Called when a node within rich text (<see cref="IsRich"/>) is clicked, with the clicked
+		/// node. When set, this replaces the default behaviour - which opens a valid http/https
+		/// <c>href</c> on an anchor in the user's browser - letting you inspect the node and handle
+		/// custom anchor schemes or open in-game popups.
+		/// </summary>
+		[Parameter]
+		public Action<INode> OnNodeClicked { get; set; }
+
 		protected override void OnClick( MousePanelEvent e )
 		{
 			base.OnClick( e );
 
-			if ( hoveredNode is not null && hoveredNode.GetAttribute( "href", null ) is { } url )
+			if ( hoveredNode is null )
+				return;
+
+			if ( OnNodeClicked is not null )
 			{
-				bool isValid = Uri.TryCreate( url, UriKind.Absolute, out var parsedUri ) && (parsedUri.Scheme == "http" || parsedUri.Scheme == "https");
-
-				if ( !isValid )
-				{
-					Log.Warning( $"Blocked URL: {url}" );
-					return;
-				}
-
-				//
-				// Modal popup, are you sure etc?
-				//
-
-				System.Diagnostics.Process.Start( new System.Diagnostics.ProcessStartInfo()
-				{
-					FileName = parsedUri.ToString(),
-					UseShellExecute = true,
-					Verb = "open"
-				} );
+				OnNodeClicked.Invoke( hoveredNode );
+				return;
 			}
+
+			if ( hoveredNode.GetAttribute( "href", null ) is not { } url )
+				return;
+
+			bool isValid = Uri.TryCreate( url, UriKind.Absolute, out var parsedUri ) && (parsedUri.Scheme == "http" || parsedUri.Scheme == "https");
+
+			if ( !isValid )
+			{
+				Log.Warning( $"Blocked URL: {url}" );
+				return;
+			}
+
+			//
+			// Modal popup, are you sure etc?
+			//
+
+			System.Diagnostics.Process.Start( new System.Diagnostics.ProcessStartInfo()
+			{
+				FileName = parsedUri.ToString(),
+				UseShellExecute = true,
+				Verb = "open"
+			} );
 		}
 	}
 

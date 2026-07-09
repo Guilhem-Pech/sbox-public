@@ -86,8 +86,10 @@ public class Voice : Component
 
 	private MixerHandle targetMixer;
 
-	/// <inheritdoc cref="SoundHandle.TargetMixer"/>
-	[Property]
+	/// <summary>
+	/// Which mixer to target. Must be a descendant of the Voice mixer. Defaults to the Voice mixer if not set or invalid.
+	/// </summary>
+	[Property, ParentMixer( "Voice" )]
 	public MixerHandle VoiceMixer
 	{
 		get => targetMixer;
@@ -104,7 +106,7 @@ public class Voice : Component
 
 	public Mixer TargetMixer
 	{
-		get => targetMixer.GetOrDefault();
+		get => targetMixer.Get( Mixer.Voice );
 		set => VoiceMixer = value;
 	}
 
@@ -157,6 +159,13 @@ public class Voice : Component
 			morphs = new float[Renderer.Model.MorphCount];
 		}
 
+		// Ensure that the Mixer selected is a Voice mixer
+		var currentMixer = targetMixer.GetOrDefault();
+		if ( !currentMixer.IsDescendantOf( Mixer.Voice ) )
+		{
+			targetMixer = Mixer.Voice;
+		}
+
 		base.OnEnabledInternal();
 	}
 
@@ -172,8 +181,11 @@ public class Voice : Component
 			recording = false;
 		}
 
-		sound?.Dispose();
-		sound = null;
+		if ( sound is not null )
+		{
+			sound.Finished = true;
+			sound = null;
+		}
 		soundStream?.Dispose();
 		soundStream = null;
 	}
@@ -195,16 +207,12 @@ public class Voice : Component
 		get
 		{
 			if ( IsProxy ) return false;
-			if ( Mode == ActivateMode.AlwaysOn ) return true;
-			if ( Mode == ActivateMode.PushToTalk )
-			{
-				return Input.Down( PushToTalkInput );
-			}
+			if ( Preferences.VoiceMode == VoiceMode.Disabled ) return false;
+			if ( Preferences.VoiceMode == VoiceMode.OpenMicrophone )
+				return Mode == ActivateMode.AlwaysOn || Mode == ActivateMode.PushToTalk || (Mode == ActivateMode.Manual && _isListening);
 
-			if ( Mode == ActivateMode.Manual )
-				return _isListening;
-
-			return false;
+			// PushToTalk: always require key press regardless of component mode
+			return Input.Down( PushToTalkInput );
 		}
 	}
 
@@ -223,8 +231,7 @@ public class Voice : Component
 		if ( WorldspacePlayback )
 		{
 			sound.Position = WorldPosition;
-			sound.Occlusion = true;
-			sound.OcclusionRadius = 64;
+			sound.OcclusionEnabled = true;
 		}
 		else
 		{
@@ -244,9 +251,11 @@ public class Voice : Component
 
 		// Stop the sound if we haven't received voice data for a while
 		// This also stops LipSync processing which runs per-frame
+		// Use Finished instead of Dispose() so the audio thread can safely wrap up
+		// before TickInternal disposes it - avoids concurrent CBinauralEffect release/create.
 		if ( sound.IsValid() && LastPlayed > 1.0f )
 		{
-			sound.Dispose();
+			sound.Finished = true;
 			sound = null;
 		}
 
@@ -423,5 +432,15 @@ public class Voice : Component
 			LastPlayed = 0;
 			UpdateSound();
 		} );
+	}
+
+	[AttributeUsage( AttributeTargets.Property )]
+	public class ParentMixerAttribute : Attribute
+	{
+		public string MixerName { get; }
+		public ParentMixerAttribute( string mixerName )
+		{
+			MixerName = mixerName;
+		}
 	}
 }

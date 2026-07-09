@@ -1,16 +1,19 @@
 namespace Editor.MeshEditor;
 
 [Alias( "tools.mirror-tool" )]
-public partial class MirrorTool : EditorTool
+public partial class MirrorTool( string tool ) : EditorTool
 {
 	Plane? _hitPlane;
 	Plane? _plane;
 	Vector3 _point1;
 	Vector3 _point2;
 
-	readonly HashSet<MeshComponent> _meshes = [];
-	readonly Dictionary<MeshComponent, HashSet<HalfEdgeMesh.FaceHandle>> _faces = [];
-	readonly Dictionary<MeshComponent, Model> _preview = [];
+	Vector3 _dragStartP1;
+	Vector3 _dragStartP2;
+
+	readonly List<(Transform, GameObject)> _selectedObjects = [];
+
+	private IDisposable _undoScope;
 
 	void Reset()
 	{
@@ -18,31 +21,44 @@ public partial class MirrorTool : EditorTool
 		_plane = default;
 		_point1 = default;
 		_point2 = default;
+
+		_undoScope?.Dispose();
+		_undoScope = default;
 	}
 
 	public override void OnEnabled()
 	{
 		Reset();
 
-		_meshes.Clear();
-		_faces.Clear();
-		_preview.Clear();
+		using var scope = SceneEditorSession.Scope();
 
-		foreach ( var group in Selection.OfType<MeshFace>().GroupBy( f => f.Component ) )
-		{
-			_meshes.Add( group.Key );
-			_faces[group.Key] = [.. group.Select( f => f.Handle )];
-		}
+		_undoScope = SceneEditorSession.Active.UndoScope( "Mirror Selection" )
+			.WithGameObjectCreations()
+			.Push();
 
 		foreach ( var go in Selection.OfType<GameObject>() )
 		{
-			var mc = go.GetComponent<MeshComponent>();
-			if ( mc.IsValid() ) _meshes.Add( mc );
+			var copy = go.Clone( go.WorldTransform );
+			_selectedObjects.Add( new( go.WorldTransform, copy ) );
+
+			foreach ( var mc in copy.GetComponentsInChildren<MeshComponent>() )
+			{
+				mc.Mesh = BuildMesh( mc );
+			}
 		}
 
-		foreach ( var mc in _meshes )
+		if ( _selectedObjects.Count > 0 ) return;
+
+		foreach ( var group in Selection.OfType<MeshFace>().GroupBy( f => f.Component ) )
 		{
-			_preview[mc] = BuildMesh( mc ).Rebuild();
+			var tx = group.Key.WorldTransform;
+			var go = new GameObject( true, group.Key.GameObject.Name );
+			go.MakeNameUnique();
+			go.WorldTransform = tx;
+			var mc = go.Components.Create<MeshComponent>( false );
+			mc.Mesh = BuildMesh( group.Key, [.. group.Select( f => f.Handle )] );
+			mc.Enabled = true;
+			_selectedObjects.Add( new( tx, go ) );
 		}
 	}
 
@@ -50,53 +66,57 @@ public partial class MirrorTool : EditorTool
 	{
 		Reset();
 
-		_meshes.Clear();
-		_faces.Clear();
-		_preview.Clear();
+		_selectedObjects.Clear();
 	}
 
 	void Apply()
 	{
 		if ( !_plane.HasValue ) return;
 
-		using var scope = SceneEditorSession.Scope();
-		using ( SceneEditorSession.Active.UndoScope( "Mirror Selection" )
-			.WithGameObjectCreations()
-			.Push() )
+		Reset();
+
+		Selection.Clear();
+
+		foreach ( var (_, go) in _selectedObjects )
 		{
-			foreach ( var mc in _meshes )
-			{
-				var mesh = BuildMesh( mc );
+			Selection.Add( go );
+		}
 
-				var go = new GameObject( true, mc.GameObject.Name );
-				go.MakeNameUnique();
-				go.WorldTransform = MirrorTransform( mc.WorldTransform, _plane.Value );
+		_selectedObjects.Clear();
 
-				var c = go.Components.Create<MeshComponent>( false );
-				c.Mesh = mesh;
-				c.Enabled = true;
-			}
+		EditorToolManager.SetSubTool( tool );
+	}
+
+	void Cancel()
+	{
+		using var scope = SceneEditorSession.Scope();
+
+		foreach ( var (_, go) in _selectedObjects )
+		{
+			if ( go.IsValid() ) go.Destroy();
 		}
 
 		Reset();
+
+		_selectedObjects.Clear();
+
+		EditorToolManager.SetSubTool( tool );
 	}
 
-	void Cancel() => Reset();
-
-	PolygonMesh BuildMesh( MeshComponent mc )
+	static PolygonMesh BuildMesh( MeshComponent mc, HashSet<HalfEdgeMesh.FaceHandle> faces = null )
 	{
 		var mesh = new PolygonMesh();
 		mesh.SetSmoothingAngle( 40 );
 		mesh.Transform = mc.Mesh.Transform;
 		mesh.MergeMesh( mc.Mesh, Transform.Zero, out _, out _, out var newFaces );
 
-		if ( _faces.TryGetValue( mc, out var keepSourceFaces ) )
+		if ( faces is not null )
 		{
-			mesh.RemoveFaces( [.. newFaces.Where( kv => !keepSourceFaces.Contains( kv.Key ) ).Select( kv => kv.Value )] );
+			mesh.RemoveFaces( [.. newFaces.Where( kv => !faces.Contains( kv.Key ) ).Select( kv => kv.Value )] );
 		}
 
 		mesh.FlipAllFaces();
-		mesh.Scale( new Vector3( 1, -1, 1 ), false );
+		mesh.Scale( new Vector3( 1, -1, 1 ) );
 
 		return mesh;
 	}
@@ -116,58 +136,132 @@ public partial class MirrorTool : EditorTool
 		return new Transform( pos, Rotation.LookAt( forward, up ) );
 	}
 
+	static Vector3 SnapToPlaneGrid( Vector3 point, Vector3 planeNormal )
+	{
+		var rotation = Rotation.LookAt( planeNormal );
+		var local = point * rotation.Inverse;
+		local = Gizmo.Snap( local, new Vector3( 0, 1, 1 ) );
+		return local * rotation;
+	}
+
+	void UpdateMirrorPlane()
+	{
+		if ( !_hitPlane.HasValue ) return;
+
+		var up = _hitPlane.Value.Normal;
+		var right = _point2 - _point1;
+
+		if ( right.LengthSquared.AlmostEqual( 0.0f ) )
+		{
+			_plane = default;
+			return;
+		}
+
+		var forward = up.Cross( right ).Normal;
+		_plane = new Plane( forward, _point1.Dot( forward ) );
+	}
+
 	public override void OnUpdate()
 	{
-		if ( _preview.Count == 0 ) return;
+		if ( _selectedObjects.Count == 0 ) return;
 
 		Gizmo.Draw.IgnoreDepth = true;
 
 		if ( _plane.HasValue )
 		{
-			foreach ( var (mc, model) in _preview )
+			foreach ( var (tx, copy) in _selectedObjects )
 			{
-				Gizmo.Draw.Model( model, MirrorTransform( mc.WorldTransform, _plane.Value ) );
+				if ( !copy.IsValid() ) continue;
+
+				copy.WorldTransform = MirrorTransform( tx, _plane.Value );
 			}
+		}
+
+		if ( _hitPlane.HasValue )
+		{
+			var normal = _hitPlane.Value.Normal;
 
 			Gizmo.Draw.Color = Color.White;
-			Gizmo.Draw.LineThickness = 4;
-			Gizmo.Draw.Sprite( _point1, 10, null, false );
-			Gizmo.Draw.Sprite( _point2, 10, null, false );
-			Gizmo.Draw.Line( _point1, _point2 );
+
+			using ( Gizmo.Scope( "mirror_p1", _point1 ) )
+			{
+				Gizmo.Hitbox.Sprite( 0, 12, false );
+
+				if ( Gizmo.WasLeftMousePressed && Gizmo.IsHovered )
+					_dragStartP1 = _point1;
+
+				if ( Gizmo.Pressed.This )
+				{
+					var drag = Gizmo.GetMouseDrag( 0, normal );
+					_point1 = SnapToPlaneGrid( _dragStartP1 - drag, normal );
+					UpdateMirrorPlane();
+				}
+
+				Gizmo.Draw.Sprite( 0, Gizmo.IsHovered ? 12 : 10, null, false );
+			}
+
+			using ( Gizmo.Scope( "mirror_p2", _point2 ) )
+			{
+				Gizmo.Hitbox.Sprite( 0, 12, false );
+
+				if ( Gizmo.WasLeftMousePressed && Gizmo.IsHovered )
+					_dragStartP2 = _point2;
+
+				if ( Gizmo.Pressed.This )
+				{
+					var drag = Gizmo.GetMouseDrag( 0, normal );
+					_point2 = SnapToPlaneGrid( _dragStartP2 - drag, normal );
+					UpdateMirrorPlane();
+				}
+
+				Gizmo.Draw.Sprite( 0, Gizmo.IsHovered ? 12 : 10, null, false );
+			}
+
+			using ( Gizmo.Scope( "mirror_line" ) )
+			{
+				using var _ = Gizmo.Hitbox.LineScope();
+
+				if ( Gizmo.WasLeftMousePressed && Gizmo.IsHovered )
+				{
+					_dragStartP1 = _point1;
+					_dragStartP2 = _point2;
+				}
+
+				if ( Gizmo.Pressed.This )
+				{
+					var drag = Gizmo.GetMouseDrag( _dragStartP1, normal );
+					_point1 = SnapToPlaneGrid( _dragStartP1 - drag, normal );
+					_point2 = SnapToPlaneGrid( _dragStartP2 - drag, normal );
+					UpdateMirrorPlane();
+				}
+
+				Gizmo.Draw.LineThickness = Gizmo.IsHovered ? 5 : 4;
+				Gizmo.Draw.Line( _point1, _point2 );
+			}
 		}
 
 		var tr = TracePlane();
 		if ( !tr.Hit ) return;
 
-		var rot = Rotation.LookAt( tr.Normal );
-		var point = Gizmo.Snap( tr.HitPosition * rot.Inverse, new Vector3( 0, 1, 1 ) ) * rot;
+		var point = SnapToPlaneGrid( tr.HitPosition, tr.Normal );
 
-		Gizmo.Draw.Sprite( point, 10, null, false );
+		if ( !Gizmo.HasHovered )
+		{
+			Gizmo.Draw.Color = Color.White;
+			Gizmo.Draw.Sprite( point, 10, null, false );
+		}
 
-		if ( Gizmo.WasLeftMousePressed )
+		if ( Gizmo.WasLeftMousePressed && !Gizmo.HasHovered )
 		{
 			_hitPlane = new Plane( point, tr.Normal );
-			_plane = _hitPlane;
 			_point1 = point;
 			_point2 = point;
+			_plane = default;
 		}
-		else if ( Gizmo.IsLeftMouseDown )
+		else if ( Gizmo.IsLeftMouseDown && !Gizmo.HasHovered && !point.AlmostEqual( _point1 ) )
 		{
 			_point2 = point;
-
-			if ( _point1.AlmostEqual( _point2 ) )
-			{
-				_plane = default;
-			}
-			else
-			{
-				var forward = tr.Normal.Cross( _point2 - _point1 ).Normal;
-				_plane = new Plane( forward, _point1.Dot( forward ) );
-			}
-		}
-		else
-		{
-			_hitPlane = default;
+			UpdateMirrorPlane();
 		}
 	}
 
@@ -175,26 +269,32 @@ public partial class MirrorTool : EditorTool
 	{
 		if ( Gizmo.Pressed.Any ) return default;
 
-		if ( _hitPlane.HasValue &&
-			 _hitPlane.Value.TryTrace( Gizmo.CurrentRay, out var hit, true ) )
+		SceneTraceResult tr = default;
+
+		if ( _hitPlane.HasValue )
 		{
-			return new SceneTraceResult
+			var plane = _hitPlane.Value;
+			if ( plane.TryTrace( Gizmo.CurrentRay, out var hit, true ) )
 			{
-				Hit = true,
-				Normal = _hitPlane.Value.Normal,
-				HitPosition = hit
-			};
+				tr.Hit = true;
+				tr.Normal = plane.Normal;
+				tr.HitPosition = hit;
+			}
 		}
-
-		var tr = MeshTrace.Run();
-		if ( tr.Hit ) return tr;
-
-		var ground = new Plane( Vector3.Up, 0 );
-		if ( ground.TryTrace( Gizmo.CurrentRay, out var g ) )
+		else
 		{
-			tr.Hit = true;
-			tr.Normal = ground.Normal;
-			tr.HitPosition = g;
+			tr = MeshTrace.Run();
+
+			if ( !tr.Hit )
+			{
+				var plane = new Plane( Vector3.Up, 0 );
+				if ( plane.TryTrace( Gizmo.CurrentRay, out var hit ) )
+				{
+					tr.Hit = true;
+					tr.Normal = plane.Normal;
+					tr.HitPosition = hit;
+				}
+			}
 		}
 
 		return tr;

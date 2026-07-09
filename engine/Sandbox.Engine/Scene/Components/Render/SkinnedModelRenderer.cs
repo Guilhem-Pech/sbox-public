@@ -253,6 +253,8 @@ public sealed partial class SkinnedModelRenderer : ModelRenderer, Component.Exec
 
 	protected override void OnDisabled()
 	{
+		_boneMergeTarget?.RemoveBoneMergeChild( this );
+
 		_skinnedParent?._skinnedChildren.Remove( this ); // no need to run full update
 		_skinnedParent = null;
 
@@ -267,6 +269,17 @@ public sealed partial class SkinnedModelRenderer : ModelRenderer, Component.Exec
 
 		Morphs.Apply();
 		Sequence.Apply();
+
+		//
+		// Merge our bones immediately if we have a parent. This avoids frame 0 flicker.
+		// Added March 2026 to fix avatar bind pose flicker when hovering clothing icons for preview
+		//
+		var skinParent = _boneMergeTarget ?? _skinnedParent;
+		if ( skinParent.IsValid() && skinParent.SceneModel.IsValid() && o is SceneModel sm )
+		{
+			sm.Transform = skinParent.SceneModel.Transform;
+			sm.MergeBones( skinParent.SceneModel );
+		}
 	}
 
 	protected override void UpdateObject()
@@ -367,7 +380,7 @@ public sealed partial class SkinnedModelRenderer : ModelRenderer, Component.Exec
 		if ( PlayAnimationsInEditorScene ) return true;
 
 		// Do we have any modified animgraph parameters?
-		if ( parameters.Count > 0 )
+		if ( StoredParameterCount > 0 )
 			return true;
 
 		// If we're not using animgraph, do we have a sequence selected?
@@ -475,6 +488,8 @@ public sealed partial class SkinnedModelRenderer : ModelRenderer, Component.Exec
 	/// For non procedural bones, copy the "parent space" bone from to the GameObject transform. Will
 	/// return true if any transforms have changed.
 	/// </summary>
+	Transform[] _parentSpaceScratch;
+
 	bool UpdateGameObjectsFromBones()
 	{
 		bool transformsChanged = false;
@@ -483,6 +498,12 @@ public sealed partial class SkinnedModelRenderer : ModelRenderer, Component.Exec
 
 		// The offset between our transform and root target.
 		Transform? mergeOffset = mergeTarget.IsValid() ? WorldTransform.ToLocal( mergeTarget.WorldTransform ) : default;
+
+		// Pull every parent-space bone in one interop call rather than one per bone object.
+		var boneCount = Model.IsValid() ? Model.BoneCount : 0;
+		if ( _parentSpaceScratch is null || _parentSpaceScratch.Length < boneCount )
+			_parentSpaceScratch = new Transform[boneCount];
+		SceneModel.GetParentSpaceBones( _parentSpaceScratch.AsSpan( 0, boneCount ) );
 
 		foreach ( var entry in boneToGameObject )
 		{
@@ -494,7 +515,11 @@ public sealed partial class SkinnedModelRenderer : ModelRenderer, Component.Exec
 			if ( entry.Value.Flags.Contains( GameObjectFlags.Absolute ) )
 				continue;
 
-			var transform = SceneModel.GetParentSpaceBone( entry.Key.Index );
+			var boneIndex = entry.Key.Index;
+			if ( boneIndex < 0 || boneIndex >= boneCount )
+				continue;
+
+			var transform = _parentSpaceScratch[boneIndex];
 			if ( !transform.IsValid )
 				continue;
 

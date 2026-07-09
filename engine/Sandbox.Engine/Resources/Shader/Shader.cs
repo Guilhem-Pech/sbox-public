@@ -26,12 +26,17 @@ public partial class Shader : Resource
 		native = CVfx.Create( "__debugShader" );
 	}
 
-	~Shader()
+	internal override void Destroy()
 	{
-		var n = native;
-		native = default;
+		if ( !native.IsNull )
+		{
+			var n = native;
+			native = default;
 
-		MainThread.Queue( () => n.DestroyStrongHandle() );
+			MainThread.Queue( () => n.DestroyStrongHandle() );
+		}
+
+		base.Destroy();
 	}
 
 	const int VFX_CHECK_MD5_AGAINST_SOURCE = (1 << 0);
@@ -52,6 +57,14 @@ public partial class Shader : Resource
 	internal bool LoadFromCompiled( string filename )
 	{
 		return native.CreateFromResourceFile( filename, NativeEngine.VfxCompileTarget_t.SM_6_0_VULKAN, VFX_CHECK_MD5_AGAINST_SOURCE | VFX_LOAD_STATIC_COMBO_DATA, true );
+	}
+
+	/// <summary>
+	/// Loads the shader from an already-compiled <c>.shader_c</c> so it can be recompiled, WITHOUT loading the per-static-combo compiled data.
+	/// </summary>
+	internal bool LoadCompiledForRecompile( string filename )
+	{
+		return native.CreateFromResourceFile( filename, NativeEngine.VfxCompileTarget_t.SM_6_0_VULKAN, 0, true );
 	}
 
 	/// <summary>

@@ -30,11 +30,14 @@ native class IRenderContext as NativeEngine.IRenderContext
 	void DrawInstanced( RenderPrimitiveType type, int nFirstVertex, int nVertexCountPerInstance, int nInstanceCount );
 	void DrawIndexed( RenderPrimitiveType type, int nFirstIndex, int nIndexCount, int nMaxVertexCount, int nBaseVertex );
 	void DrawIndexedInstanced( RenderPrimitiveType type, int nFirstIndex, int nIndexCountPerInstance, int nInstanceCount, int nMaxVertexCount, int nBaseVertex );
-	void DrawInstancedIndirect( RenderPrimitiveType type, RenderBufferHandle_t hDrawArgBuffer, uint nBufferOffset );
-	void DrawIndexedInstancedIndirect( RenderPrimitiveType type, RenderBufferHandle_t hDrawArgBuffer, uint nBufferOffset );
+	void DrawInstancedIndirect( RenderPrimitiveType type, RenderBufferHandle_t hDrawArgBuffer, uint nBufferOffset, uint nDrawCount, uint nStride );
+	void DrawIndexedInstancedIndirect( RenderPrimitiveType type, RenderBufferHandle_t hDrawArgBuffer, uint nBufferOffset, uint nDrawCount, uint nStride );
 
 	inline void TextureBarrierTransition( ITexture hSrc, int mips, RenderBarrierPipelineStageFlags_t srcStage, RenderBarrierPipelineStageFlags_t dstStage, RenderImageLayout_t layout, RenderBarrierAccessFlags_t srcFlags, RenderBarrierAccessFlags_t dstFlags )
 	{
+		if ( hSrc == RENDER_TEXTURE_HANDLE_INVALID )
+			return;
+
 		RenderUAVBarrier_t uavBarrier { hSrc, srcStage, dstStage, srcFlags, dstFlags, -1, -1, layout };
 
 		self->TextureBarrier( 1, &hSrc, &layout );
@@ -106,7 +109,6 @@ native class IRenderContext as NativeEngine.IRenderContext
 	}
 
 	void Submit();
-	void SetAssociatedThreadIndex();
 
 	inline void BindRenderTargets( SwapChainHandle_t swapChain, bool color, bool depth )
 	{

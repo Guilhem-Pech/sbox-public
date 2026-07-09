@@ -31,7 +31,26 @@ public class SystemsConfig : ConfigData
 		if ( TryGetPropertyValue( systemType, property, out var value ) )
 			return value;
 
-		return property.PropertyType.IsValueType ? Activator.CreateInstance( property.PropertyType ) : null;
+		return GetDefaultValue( property );
+	}
+
+	/// <summary>
+	/// Get the default value for a GameObjectSystem property.
+	/// </summary>
+	public static object GetDefaultValue( PropertyDescription property )
+	{
+		if ( property.GetCustomAttribute<DefaultValueAttribute>() is { } defaultValue )
+			return defaultValue.Value;
+
+		var type = property.PropertyType;
+
+		if ( Nullable.GetUnderlyingType( type ) is { } nullableType )
+			type = nullableType;
+
+		if ( type.IsValueType )
+			return Activator.CreateInstance( type );
+
+		return null;
 	}
 
 	/// <summary>
@@ -55,6 +74,7 @@ public class SystemsConfig : ConfigData
 			if ( rawValue is JsonElement je )
 			{
 				value = je.Deserialize( property.PropertyType, Json.options );
+				properties[property.Name] = value;
 				return true;
 			}
 
@@ -65,21 +85,38 @@ public class SystemsConfig : ConfigData
 				return true;
 			}
 
+			// Handle enums explicitly
+			if ( property.PropertyType.IsEnum && rawValue is IConvertible )
+			{
+				value = Enum.ToObject( property.PropertyType, Convert.ToInt32( rawValue ) );
+				properties[property.Name] = value;
+				return true;
+			}
+
 			// Only use Convert.ChangeType for primitive/convertible types
 			if ( rawValue is IConvertible && property.PropertyType.IsAssignableTo( typeof( IConvertible ) ) )
 			{
 				value = Convert.ChangeType( rawValue, property.PropertyType );
+				properties[property.Name] = value;
 				return true;
 			}
 
 			// Fall back to JSON serialization for complex types
 			var json = JsonSerializer.Serialize( rawValue, Json.options );
 			value = JsonSerializer.Deserialize( json, property.PropertyType, Json.options );
+			properties[property.Name] = value;
 			return true;
 		}
 		catch ( Exception ex )
 		{
-			Log.Warning( $"Failed to deserialize {typeName}.{property.Name}: {ex.Message}" );
+			Log.Warning( $"Removing stale GameObjectSystem config value {typeName}.{property.Name}: {ex.Message}" );
+			properties.Remove( property.Name );
+
+			if ( properties.Count == 0 )
+			{
+				Systems.Remove( typeName );
+			}
+
 			return false;
 		}
 	}

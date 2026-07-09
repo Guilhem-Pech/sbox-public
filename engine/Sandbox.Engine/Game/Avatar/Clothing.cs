@@ -5,7 +5,7 @@ namespace Sandbox;
 /// <summary>
 /// Describes an item of clothing and implicitly which other items it can be worn with
 /// </summary>
-[AssetType( Name = "Clothing Definition", Extension = "clothing", Category = "citizen", Flags = AssetTypeFlags.IncludeThumbnails )]
+[AssetType( Name = "Clothing Definition", Extension = "clothing", Category = "citizen", Flags = AssetTypeFlags.IncludeThumbnails, IconColor = "#fdea60" )]
 public sealed partial class Clothing : GameResource
 {
 
@@ -443,7 +443,7 @@ public sealed partial class Clothing : GameResource
 	{
 		if ( !SteamItemDefinitionId.HasValue ) return false;
 		if ( SteamItemDefinitionId == 0 ) return false;
-		if ( ResourceId != 0 ) return false;
+		if ( !string.IsNullOrEmpty( ResourcePath ) ) return false;
 
 		return true;
 	}

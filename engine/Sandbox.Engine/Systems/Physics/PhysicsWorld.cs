@@ -40,6 +40,8 @@ public sealed partial class PhysicsWorld : IHandle
 	/// </summary>
 	public IEnumerable<PhysicsBody> Bodies => bodies.Where( x => x.IsValid() );
 
+	internal int BodyCount => bodies.Count;
+
 	//public Action<int, PhysicsBody, PhysicsBody, Vector3> Internal_OnCollision;
 
 	/// <summary>
@@ -206,6 +208,7 @@ public sealed partial class PhysicsWorld : IHandle
 	internal Action<PhysicsIntersectionEnd> OnIntersectionEnd { get; set; }
 	internal Action<PhysicsIntersection> OnIntersectionUpdate { get; set; }
 	internal Action<PhysicsBody> OnBodyOutOfBounds { get; set; }
+	internal Action<PhysicsBody> OnBodyFellAsleep { get; set; }
 
 	unsafe void OnIntersection( VPhysIntersectionNotification_t* ptr )
 	{
@@ -221,9 +224,8 @@ public sealed partial class PhysicsWorld : IHandle
 			if ( ptr->Reason == IntersectionEventType_t.TouchBegin )
 			{
 				OnIntersectionStart?.InvokeWithWarning( new PhysicsIntersection( a, b, c ) );
-
-				a.Body.OnIntersectionStart?.InvokeWithWarning( new PhysicsIntersection( a, b, c ) );
-				b.Body.OnIntersectionStart?.InvokeWithWarning( new PhysicsIntersection( b, a, c ) );
+				a.Body.DispatchIntersectionStart( new PhysicsIntersection( a, b, c ) );
+				b.Body.DispatchIntersectionStart( new PhysicsIntersection( b, a, c ) );
 			}
 			else if ( ptr->Reason == IntersectionEventType_t.Hit )
 			{
@@ -232,26 +234,24 @@ public sealed partial class PhysicsWorld : IHandle
 			else if ( ptr->Reason == IntersectionEventType_t.TouchEnd )
 			{
 				OnIntersectionEnd?.InvokeWithWarning( new PhysicsIntersectionEnd( a, b ) );
-
-				a.Body.OnIntersectionEnd?.InvokeWithWarning( new PhysicsIntersectionEnd( a, b ) );
-				b.Body.OnIntersectionEnd?.InvokeWithWarning( new PhysicsIntersectionEnd( b, a ) );
+				a.Body.DispatchIntersectionEnd( new PhysicsIntersectionEnd( a, b ) );
+				b.Body.DispatchIntersectionEnd( new PhysicsIntersectionEnd( b, a ) );
 			}
 			else if ( ptr->Reason == IntersectionEventType_t.TouchPersists )
 			{
 				OnIntersectionUpdate?.InvokeWithWarning( new PhysicsIntersection( a, b, c ) );
-
-				a.Body.OnIntersectionUpdate?.InvokeWithWarning( new PhysicsIntersection( a, b, c ) );
-				b.Body.OnIntersectionUpdate?.InvokeWithWarning( new PhysicsIntersection( b, a, c ) );
+				a.Body.DispatchIntersectionUpdate( new PhysicsIntersection( a, b, c ) );
+				b.Body.DispatchIntersectionUpdate( new PhysicsIntersection( b, a, c ) );
 			}
 			else if ( ptr->Reason == IntersectionEventType_t.TriggerBegin )
 			{
-				a.Body.OnTriggerBegin?.InvokeWithWarning( new PhysicsIntersection( a, b, c ) );
-				b.Body.OnTriggerBegin?.InvokeWithWarning( new PhysicsIntersection( b, a, c ) );
+				a.Body.DispatchTriggerBegin( new PhysicsIntersection( a, b, c ) );
+				b.Body.DispatchTriggerBegin( new PhysicsIntersection( b, a, c ) );
 			}
 			else if ( ptr->Reason == IntersectionEventType_t.TriggerEnd )
 			{
-				a.Body.OnTriggerEnd?.InvokeWithWarning( new PhysicsIntersectionEnd( a, b ) );
-				b.Body.OnTriggerEnd?.InvokeWithWarning( new PhysicsIntersectionEnd( b, a ) );
+				a.Body.DispatchTriggerEnd( new PhysicsIntersectionEnd( a, b ) );
+				b.Body.DispatchTriggerEnd( new PhysicsIntersectionEnd( b, a ) );
 			}
 		}
 		catch ( System.Exception e )
@@ -453,6 +453,9 @@ public sealed partial class PhysicsWorld : IHandle
 		world.RemoveBody( physicsBody );
 		bodies.Remove( physicsBody );
 	}
+
+	// If a body handle is deleted from native, we can forget it here (empties bodies list of invalid bodies).
+	internal void ForgetBody( PhysicsBody physicsBody ) => bodies.Remove( physicsBody );
 }
 
 [Expose]

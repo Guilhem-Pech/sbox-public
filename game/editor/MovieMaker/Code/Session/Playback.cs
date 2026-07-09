@@ -66,6 +66,8 @@ public sealed partial class Session
 			MovieBoneAnimatorSystem.Current?.ClearBones( renderer );
 		}
 
+		using var scope = Player.BeginApplyFrame();
+
 		if ( IsOpenInEditor && SyncPlayback )
 		{
 			foreach ( var player in Player.Scene.GetAllComponents<MoviePlayer>() )
@@ -77,6 +79,10 @@ public sealed partial class Session
 		}
 
 		ApplyFrameCore( time );
+
+		Root.AdvanceAnimations( time - _lastAppliedTime );
+
+		_lastAppliedTime = time;
 	}
 
 	private void ApplyFrameCore( MovieTime time )
@@ -87,10 +93,6 @@ public sealed partial class Session
 		{
 			view.ApplyFrame( time );
 		}
-
-		AdvanceAnimations( time - _lastAppliedTime );
-
-		_lastAppliedTime = time;
 	}
 
 	public void RefreshNextFrame()

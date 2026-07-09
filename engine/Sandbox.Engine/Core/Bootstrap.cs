@@ -1,5 +1,4 @@
 ﻿using NativeEngine;
-using Sandbox.Engine.Settings;
 using Sandbox.Network;
 using Sandbox.Utility;
 using Sandbox.VR;
@@ -33,6 +32,8 @@ internal static class Bootstrap
 		try
 		{
 			InitMinimal( EngineGlobal.GetGameRootFolder() );
+
+			DLLImportResolver.SetupResolvers();
 
 			StartupTiming = new Api.Events.EventRecord( $"StartupTiming.{(Application.IsEditor ? "Editor" : (Application.IsHeadless ? "Server" : "Game"))}" );
 			StartupTiming.StartTimer( "Time" );
@@ -185,18 +186,7 @@ internal static class Bootstrap
 			//
 			VRSystem.Init();
 
-			//
-			// Init common engine shit
-			//
-			{
-				Screen.UpdateFromEngine();
-				Material.UI.InitStatic();
-				Gizmo.GizmoDraw.InitStatic();
-				Model.InitStatic();
-				Texture.InitStatic();
-				CubemapRendering.InitStatic();
-				Graphics.InitStatic();
-			}
+			Screen.UpdateFromEngine();
 
 			if ( !Application.IsHeadless && !Application.IsStandalone )
 			{
@@ -219,7 +209,7 @@ internal static class Bootstrap
 				SyncContext.RunBlocking( IGameInstanceDll.Current.Initialize() );
 			}
 
-			if ( SteamClient.IsValid )
+			if ( SteamClient.IsValid && ErrorReporter.IsUsingSentry )
 			{
 				SentrySdk.ConfigureScope( scope =>
 				{
@@ -325,44 +315,7 @@ internal static class Bootstrap
 		}
 
 		if ( Application.IsBenchmark )
-		{
-			if ( !Api.IsConnected )
-			{
-				Log.Warning( "Not connected to backend - quitting." );
-				Environment.Exit( 10 );
-			}
-
-			RenderSettings.Instance.ApplySettingsForBenchmarks();
-
-			// Load First Benchmark package
-			if ( !TryLoadNextBenchmarkPackage() )
-			{
-				Console.WriteLine( "Quitting" );
-				ConVarSystem.Run( "quit" );
-			}
-		}
-	}
-
-	private readonly record struct BenchmarkPackage( string PackageName, Dictionary<string, string> GameSettings = null );
-
-	private static int _currentBenchmarkGameIndex = 0;
-
-	private static List<BenchmarkPackage> _benchmarkGames = new()
-	{
-		new BenchmarkPackage( "facepunch.benchmark" ),
-		new BenchmarkPackage( "facepunch.sbdm", new Dictionary<string, string> { { "sbdm.dev.benchmark", "1" } } ),
-	};
-
-	internal static bool TryLoadNextBenchmarkPackage()
-	{
-		if ( _currentBenchmarkGameIndex >= _benchmarkGames.Count ) return false;
-
-		var benchmarkGame = _benchmarkGames[_currentBenchmarkGameIndex];
-		LaunchArguments.GameSettings = benchmarkGame.GameSettings;
-		_ = IGameInstanceDll.Current.LoadGamePackageAsync( benchmarkGame.PackageName, GameLoadingFlags.Host, default );
-		_currentBenchmarkGameIndex++;
-
-		return true;
+			BenchmarkOrchestrator.InitFromCli();
 	}
 
 	static void InitEngineConVars()

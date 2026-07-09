@@ -1,4 +1,5 @@
 ﻿using System.Text.Json.Serialization;
+using static Sandbox.BytePack;
 
 namespace Sandbox;
 
@@ -12,7 +13,11 @@ public abstract partial class Resource : IValid, IJsonConvert, BytePack.ISeriali
 	/// ID of this resource,
 	/// </summary>
 	[Hide, JsonIgnore]
+	[Obsolete( "ResourceId is obsolete and will be removed in the future." )]
 	public int ResourceId { get; protected set; }
+
+	/// Internal use only — a stable 64-bit hash of ResourcePath, used for networking and resource lookup.
+	internal ulong ResourceIdLong { get; set; }
 
 	/// <summary>
 	/// Path to this resource.
@@ -33,16 +38,18 @@ public abstract partial class Resource : IValid, IJsonConvert, BytePack.ISeriali
 
 
 	[Hide, JsonIgnore] public abstract bool IsValid { get; }
+	[Hide, JsonIgnore] public virtual bool IsError => false;
 
 	/// <summary>
 	/// True if this resource has been changed but the changes aren't written to disk
 	/// </summary>
 	[Hide, JsonIgnore] public virtual bool HasUnsavedChanges => false;
 
-	internal void Destroy()
+	internal virtual void Destroy()
 	{
 		// Unregister on main thread
-		MainThread.Queue( () => { Game.Resources.Unregister( this ); } );
+		// Null check because resource lirbary may already be gone.
+		MainThread.Queue( () => { Game.Resources?.Unregister( this ); } );
 
 		if ( Manifest != default ) MainThread.QueueDispose( Manifest );
 		Manifest = default;
@@ -78,7 +85,11 @@ public abstract partial class Resource : IValid, IJsonConvert, BytePack.ISeriali
 	{
 		ResourcePath = FixPath( resourcePath );
 		ResourceName = System.IO.Path.GetFileNameWithoutExtension( ResourcePath );
+
+#pragma warning disable CS0618 // Type or member is obsolete
 		ResourceId = ResourcePath.FastHash();
+#pragma warning restore CS0618 // Type or member is obsolete
+		ResourceIdLong = ResourcePath.FastHash64();
 
 		Game.Resources.RegisterWeak( this );
 	}
@@ -131,18 +142,25 @@ public abstract partial class Resource : IValid, IJsonConvert, BytePack.ISeriali
 
 	static object BytePack.ISerializer.BytePackRead( ref ByteStream bs, Type targetType )
 	{
-		var id = bs.Read<int>();
-		return ResourceLibrary.Get<Resource>( id );
+		var id = bs.Read<ulong>();
+		// Fast path: already loaded in one of the indexes, garantueed for GameResources
+		var resource = Game.Resources.GetByIdLong<Resource>( id );
+		if ( resource != null ) return resource;
+
+		// Slow path: native resource exists on disk but hasn't been loaded yet (common on connecting clients).
+		var path = Game.Resources.LookupPath( id );
+		if ( path == null ) return null;
+		return Load( targetType, path );
 	}
 
 	static void BytePack.ISerializer.BytePackWrite( object value, ref ByteStream bs )
 	{
 		if ( value is not Resource resource )
 		{
-			bs.Write( 0 );
+			bs.Write( 0UL );
 			return;
 		}
 
-		bs.Write( resource.ResourceId );
+		bs.Write( resource.ResourceIdLong );
 	}
 }

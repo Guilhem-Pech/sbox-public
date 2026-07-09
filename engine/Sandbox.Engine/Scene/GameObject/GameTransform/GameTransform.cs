@@ -145,6 +145,27 @@ public partial class GameTransform
 		return true;
 	}
 
+	/// <summary>
+	/// Sets the local transform with exact (bitwise) equality checks, bypassing Vector3's
+	/// approximate AlmostEqual operator. Use during deserialization so that tiny floating-point
+	/// values (e.g. -7.2e-05) are not silently swallowed by the 0.0001 tolerance.
+	/// </summary>
+	internal void SetLocalTransformExact( in Transform value )
+	{
+		// Exact bitwise comparison — avoid Vector3/Rotation operator== which use AlmostEqual
+		if ( _targetLocal.Position.Equals( value.Position )
+			&& _targetLocal.Rotation.Equals( value.Rotation )
+			&& _targetLocal.Scale.Equals( value.Scale ) )
+			return;
+
+		_hasPositionSet = true;
+		_interpolatedLocal = value;
+		_targetLocal = value;
+		_positionBuffer?.Clear();
+		_rotationBuffer?.Clear();
+		TransformChanged();
+	}
+
 
 	/// <summary>
 	/// The target world transform. For internal use only.
@@ -275,6 +296,7 @@ public partial class GameTransform
 	/// </summary>
 	[ActionGraphInclude]
 	[DefaultValue( 1f )]
+	[Uniform]
 	[Obsolete( "Use WorldScale instead of Transform.Scale" )]
 	public Vector3 Scale
 	{
@@ -318,6 +340,7 @@ public partial class GameTransform
 	[ActionGraphInclude]
 	[Property]
 	[DefaultValue( 1f )]
+	[Uniform]
 	[Obsolete( "Use LocalScale instead of Transform.LocalScale" )]
 	public Vector3 LocalScale
 	{
@@ -345,7 +368,7 @@ public partial class GameTransform
 	{
 		if ( !Application.IsHeadless && GameObject.Network.Interpolation && !clearInterpolation )
 		{
-			_networkTransformBuffer.Add( new TransformState( transform ), Time.NowDouble );
+			(_networkTransformBuffer ??= new( TransformState.CreateInterpolator() )).Add( new TransformState( transform ), Time.NowDouble );
 			Interpolate = true;
 		}
 		else

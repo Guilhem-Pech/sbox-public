@@ -23,7 +23,7 @@ public sealed partial class AnimationGraph : Resource
 	/// <summary>
 	/// Whether the animation graph is invalid, or has not yet loaded.
 	/// </summary>
-	public bool IsError => native.IsNull || !native.IsStrongHandleValid();
+	public override bool IsError => native.IsNull || !native.IsStrongHandleValid();
 
 	/// <summary>
 	/// Animation graph file name.
@@ -54,6 +54,7 @@ public sealed partial class AnimationGraph : Resource
 	private void UpdateNameToIndexMapping()
 	{
 		_nameToIndex.Clear();
+		_enumOptions?.Clear();
 
 		for ( var i = 0; i < ParamCount; i++ )
 		{
@@ -61,12 +62,51 @@ public sealed partial class AnimationGraph : Resource
 		}
 	}
 
-	~AnimationGraph()
-	{
-		var n = native;
-		native = default;
+	private Dictionary<string, Dictionary<string, int>> _enumOptions;
 
-		MainThread.Queue( () => n.DestroyStrongHandle() );
+	/// <summary>
+	/// Find the index of a named option on an enum parameter, case insensitive. False when the
+	/// parameter doesn't exist, isn't an enum, or has no option with that name.
+	/// </summary>
+	internal bool TryGetEnumOptionIndex( string parameterName, string option, out int index )
+	{
+		index = default;
+
+		if ( string.IsNullOrEmpty( parameterName ) || string.IsNullOrEmpty( option ) )
+			return false;
+
+		_enumOptions ??= new( StringComparer.OrdinalIgnoreCase );
+
+		if ( _enumOptions.TryGetValue( parameterName, out var options ) )
+			return options.TryGetValue( option, out index );
+
+		var param = GetParameterFromList( parameterName );
+		if ( !param.IsValid || param.GetParameterType() != AnimParamType.Enum )
+			return false;
+
+		options = new( StringComparer.OrdinalIgnoreCase );
+
+		for ( var i = 0; i < param.GetNumOptionNames(); i++ )
+		{
+			options[param.GetOptionName( i )] = i;
+		}
+
+		_enumOptions[parameterName] = options;
+
+		return options.TryGetValue( option, out index );
+	}
+
+	internal override void Destroy()
+	{
+		if ( !native.IsNull )
+		{
+			var n = native;
+			native = default;
+
+			MainThread.Queue( () => n.DestroyStrongHandle() );
+		}
+
+		base.Destroy();
 	}
 
 	internal IAnimParameterList ParameterList => native.GetParameterList();

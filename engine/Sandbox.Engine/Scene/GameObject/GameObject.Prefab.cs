@@ -1,7 +1,4 @@
-﻿using System.Collections.ObjectModel;
-using System.Text.Json.Nodes;
-
-namespace Sandbox;
+﻿namespace Sandbox;
 
 public partial class GameObject
 {
@@ -37,7 +34,7 @@ public partial class GameObject
 	/// </summary>
 	public static GameObject GetPrefab( string prefabFilePath )
 	{
-		var prefabFile = ResourceLibrary.Get<PrefabFile>( prefabFilePath );
+		var prefabFile = PrefabFile.Load( prefabFilePath );
 		if ( prefabFile is null ) return default;
 
 		return SceneUtility.GetPrefabScene( prefabFile );
@@ -177,10 +174,14 @@ public partial class GameObject
 	}
 	PrefabInstanceData _prefabInstanceData = null;
 
+	// Id of a nested prefab instance whose guid mappings are built in PostDeserialize, once its
+	// subtree has its final ids.
+	private Guid? _pendingNestedMappingId;
+
 	/// <summary>
 	/// Defines objects within a scene hierarchy we want to track for prefab diffing and patching.
 	/// </summary>
-	internal static HashSet<Json.TrackedObjectDefinition> DiffObjectDefinitions =
+	public static HashSet<Json.TrackedObjectDefinition> DiffObjectDefinitions =
 	[
 		Json.TrackedObjectDefinition.CreatePresenceBasedDefinition(
 			type: "GameObject",

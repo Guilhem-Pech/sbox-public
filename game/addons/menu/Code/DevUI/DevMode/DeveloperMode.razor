@@ -5,8 +5,9 @@
 
     <div class="left">
         <ConvarToggle Title="Profiler" ConVar="overlay_profile"></ConvarToggle>
-        <ConvarToggle Title="Frame Stats" ConVar="overlay_frame"></ConvarToggle>
+        <ConvarCycle Title="Frame Stats" ConVar="overlay_frame" Values="0,1,2,3" Labels="Off,Basic,Detailed,All"></ConvarCycle>
         <ConvarToggle Title="Allocations" ConVar="overlay_alloc"></ConvarToggle>
+        <ConvarToggle Title="Audio" ConVar="overlay_audio"></ConvarToggle>
         <ConvarToggle Title="Network Graph" ConVar="overlay_network_graph"></ConvarToggle>
         <ConvarToggle Title="Network Messages" ConVar="overlay_network_calls"></ConvarToggle>
 		<ConvarToggle Title="PostProcess Stack" ConVar="overlay_pp"></ConvarToggle>
@@ -30,43 +31,30 @@
 
 @code
 {
-    static DeveloperMode Singleton;
-
     public Console Console { get; set; }
 
     public static bool Open { get; protected set; }
 
-    public DeveloperMode()
-    {
-        Singleton = this;
-    }
+    bool wasOpen;
 
     public override void Tick()
     {
         base.Tick();
 
+        if ( Open != wasOpen )
+        {
+            wasOpen = Open;
+
+            if ( Open )
+                Console?.Input?.Focus();
+            else
+                Console?.Input?.Blur();
+
+            FindRootPanel()?.SetClass( "developermode", Open );
+            MenuUtility.SkipAllTransitions();
+        }
+
         SetClass("open", Open);
-    }
-
-
-    void Toggle()
-    {
-        Open = !Open;
-
-        if (Open)
-        {
-            Console.Input.Focus();
-           // Event.Run("developermode.open");
-        }
-        else
-        {
-            Console.Input.Blur();
-          //  Event.Run("developermode.close");
-        }
-
-        FindRootPanel().SetClass("developermode", Open);
-
-        MenuUtility.SkipAllTransitions();
     }
 
     public override Panel FindPopupPanel() => this;
@@ -74,6 +62,6 @@
     [MenuConCmd("con_toggle")]
     static void ToggleConsole()
     {
-        Singleton?.Toggle();
+        Open = !Open;
     }
 }

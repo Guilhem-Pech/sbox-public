@@ -374,8 +374,8 @@ PS
 		float fogStrength, alphaCutoff;
 		UnpackFogAndAlpha( sprite.FogStrengthCutout, fogStrength, alphaCutoff );
 
-		Texture2D ColorTexture = Bindless::GetTexture2D( NonUniformResourceIndex( sprite.TextureHandle ), true );
-		SamplerState spriteSampler = Bindless::GetSampler( NonUniformResourceIndex( sprite.SamplerIndex ) );
+		Texture2D ColorTexture = Bindless::GetTexture2D( sprite.TextureHandle, true );
+		SamplerState spriteSampler = Bindless::GetSampler( sprite.SamplerIndex );
 
 		float2 uv = GetUV(sprite, i.uv.xy); 
 		float4 textureColor = ColorTexture.Sample( spriteSampler, uv.xy ).rgba;
@@ -414,15 +414,16 @@ PS
 		{
 			col.rgb = lerp( col.rgb, overlayColor.rgb, overlayColor.a );
 		}
-		col.rgba *= tintColor;
-
 	#if ( S_MODE_DEPTH == 1 )
 		OpaqueFadeDepth(col.a * tintColor.a , i.vPositionSs.xy );
 		return 1;
 	#else
+		// Cutoff on untinted alpha so tint opacity doesn't interact with the scissor threshold
 		col.a = AdjustOpacityForAlphaToCoverage( col.a, alphaCutoff, 1.0f, i.vPositionSs.xy );
 		if(col.a < alphaCutoff) discard;
 	#endif
+
+		col.rgba *= tintColor;
 
 		if ( sprite.DepthFeather > 0 )
 		{

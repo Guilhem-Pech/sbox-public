@@ -28,7 +28,12 @@ public sealed partial class PhysicsBody : IHandle
 		World.RegisterBody( this );
 	}
 
-	void IHandle.HandleDestroy() => native = IntPtr.Zero;
+	void IHandle.HandleDestroy()
+	{
+		World?.ForgetBody( this );
+		native = IntPtr.Zero;
+	}
+
 	bool IHandle.HandleValid() => !native.IsNull;
 	#endregion
 
@@ -329,6 +334,16 @@ public sealed partial class PhysicsBody : IHandle
 	}
 
 	/// <summary>
+	/// The speed threshold below which this body will be put to sleep. Units per second.
+	/// The default is about 2 units/sec. Increase this to make bodies sleep sooner, which is useful for stacking stability.
+	/// </summary>
+	public float SleepThreshold
+	{
+		get => native.GetSleepThreshold();
+		set => native.SetSleepThreshold( value );
+	}
+
+	/// <summary>
 	/// Transform of this physics body.
 	/// </summary>
 	[ActionGraphInclude]
@@ -518,13 +533,32 @@ public sealed partial class PhysicsBody : IHandle
 			var sinAlpha = MathF.Sin( alpha );
 			var cosAlpha = MathF.Cos( alpha );
 
-			points[2 * i + 0] = new Vector3( radius1 * cosAlpha, radius1 * sinAlpha, -halfHeight );
-			points[2 * i + 1] = new Vector3( radius2 * cosAlpha, radius2 * sinAlpha, halfHeight );
+			points[2 * i + 0] = new Vector3( -halfHeight, radius1 * cosAlpha, radius1 * sinAlpha );
+			points[2 * i + 1] = new Vector3( halfHeight, radius2 * cosAlpha, radius2 * sinAlpha );
 
 			alpha += deltaAlpha;
 		}
 
 		return AddHullShape( position, rotation, points );
+	}
+
+	/// <summary>
+	/// Add a cone shape to this body.
+	/// </summary>
+	public PhysicsShape AddConeShape( Vector3 a, Vector3 b, float radiusA, float radiusB, int slices = 16 )
+	{
+		slices = slices.Clamp( 4, 128 );
+
+		var axis = b - a;
+		var length = axis.Length;
+
+		if ( length <= 0 )
+			return AddSphereShape( a, radiusA );
+
+		var rotation = Rotation.LookAt( axis.Normal );
+		var position = (a + b) * 0.5f;
+
+		return AddConeShape( position, rotation, length, radiusA, radiusB, slices );
 	}
 
 	/// <inheritdoc cref="AddMeshShape(Span{Vector3}, Span{int})"/>
@@ -1055,6 +1089,37 @@ public sealed partial class PhysicsBody : IHandle
 	}
 
 	/// <summary>
+	/// Finds the smallest move needed to separate us from another body, ignoring all collision rules.
+	/// Returns true if we're overlapping; moving us by <paramref name="direction"/> * <paramref name="distance"/> pushes us clear.
+	/// </summary>
+	public bool ComputePenetration( PhysicsBody body, out Vector3 direction, out float distance )
+	{
+		direction = default;
+		distance = default;
+
+		if ( !body.IsValid() )
+			return false;
+
+		return ComputePenetration( body, body.Transform, out direction, out distance );
+	}
+
+	/// <summary>
+	/// Finds the smallest move needed to separate us from another body placed at a given transform, ignoring
+	/// all collision rules. Returns true if we're overlapping; moving us by <paramref name="direction"/> *
+	/// <paramref name="distance"/> pushes us clear.
+	/// </summary>
+	public bool ComputePenetration( PhysicsBody body, Transform transform, out Vector3 direction, out float distance )
+	{
+		direction = default;
+		distance = default;
+
+		if ( !this.IsValid() || !body.IsValid() )
+			return false;
+
+		return native.ComputePenetration( body, transform, out direction, out distance );
+	}
+
+	/// <summary>
 	/// Checks if there's any contact points with another body
 	/// </summary>
 	internal bool IsTouching( PhysicsBody body, bool triggersOnly )
@@ -1122,8 +1187,29 @@ public sealed partial class PhysicsBody : IHandle
 	public Action<PhysicsIntersection> OnIntersectionStart { get; set; }
 	public Action<PhysicsIntersection> OnIntersectionUpdate { get; set; }
 	public Action<PhysicsIntersectionEnd> OnIntersectionEnd { get; set; }
-	internal Action<PhysicsIntersection> OnTriggerBegin { get; set; }
-	internal Action<PhysicsIntersectionEnd> OnTriggerEnd { get; set; }
+
+	internal CollisionEventSystem Listener { get; set; }
+
+	internal void DispatchIntersectionStart( PhysicsIntersection c )
+	{
+		Listener?.OnIntersectionStart( c );
+		OnIntersectionStart?.InvokeWithWarning( c );
+	}
+
+	internal void DispatchIntersectionUpdate( PhysicsIntersection c )
+	{
+		Listener?.OnIntersectionUpdate( c );
+		OnIntersectionUpdate?.InvokeWithWarning( c );
+	}
+
+	internal void DispatchIntersectionEnd( PhysicsIntersectionEnd c )
+	{
+		Listener?.OnIntersectionEnd( c );
+		OnIntersectionEnd?.InvokeWithWarning( c );
+	}
+
+	internal void DispatchTriggerBegin( PhysicsIntersection c ) => Listener?.OnTriggerBegin( c );
+	internal void DispatchTriggerEnd( PhysicsIntersectionEnd c ) => Listener?.OnTriggerEnd( c );
 
 	/// <summary>
 	/// Transform, on previous step
@@ -1154,6 +1240,11 @@ public sealed partial class PhysicsBody : IHandle
 		if ( wentOutOfBounds )
 		{
 			World?.OnBodyOutOfBounds?.Invoke( this );
+		}
+
+		if ( fellAsleep )
+		{
+			World?.OnBodyFellAsleep?.Invoke( this );
 		}
 	}
 

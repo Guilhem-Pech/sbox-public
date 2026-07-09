@@ -4,6 +4,9 @@ public static partial class Gizmo
 {
 	public sealed partial class GizmoControls
 	{
+		private BBox _bbStart;
+		private BBox _bbDelta;
+
 		private static bool ArrowPoint( string name, Vector3 direction, float length, Color color, out float distance, ref bool pressed )
 		{
 			distance = 0.0f;
@@ -22,14 +25,17 @@ public static partial class Gizmo
 			float actualArrowHeadRadius = IsHovered ? hoverArrowHeadRadius : arrowHeadRadius;
 			float actualArrowHeadLength = actualArrowHeadRadius * 2;
 
+			if ( !Pressed.This && length.AlmostEqual( 0 ) )
+				return false;
+
 			var db = Gizmo.Hitbox.DepthBias;
 			Gizmo.Hitbox.DepthBias = 0.01f;
 
-			Hitbox.Sphere( new Sphere( 0, hoverSphereRadius * Transform.UniformScale ) );
+			Hitbox.Sphere( new Sphere( 0, hoverSphereRadius ) );
 
 			Vector3 arrowFrom = Vector3.Forward * -(actualArrowHeadLength + actualSphereRadius);
 			Vector3 arrowTo = Vector3.Forward * -actualSphereRadius;
-			Hitbox.Sphere( new Sphere( arrowFrom / 2, hoverArrowHeadRadius * Transform.UniformScale ) );
+			Hitbox.Sphere( new Sphere( arrowFrom / 2, hoverArrowHeadRadius ) );
 
 			Gizmo.Hitbox.DepthBias = db;
 			color = IsHovered || Pressed.This ? Colors.Active : color;
@@ -59,81 +65,76 @@ public static partial class Gizmo
 
 		public bool BoundingBox( string name, BBox value, out BBox outValue )
 		{
-			return BoundingBox( name, value, out outValue, out _ );
+			return BoundingBox( name, value, out outValue, out _, out _ );
 		}
 
 		public bool BoundingBox( string name, BBox value, out BBox outValue, out bool outPressed )
 		{
+			return BoundingBox( name, value, out outValue, out outPressed, out _ );
+		}
+
+		public bool BoundingBox( string name, BBox value, out BBox outValue, out bool outPressed, out Vector3 outResizeAxis )
+		{
 			outValue = value;
+			outResizeAxis = default;
 
 			using ( Scope( name ) )
 			{
 				Transform = Transform.ToWorld( new Transform( value.Center ) );
 
 				var halfSize = value.Size * 0.5f;
-				var resized = false;
 				var resizeDist = 0.0f;
 				var resizeAxis = Vector3.Zero;
 				var pressed = false;
 
-				if ( ArrowPoint( "Forward", Vector3.Forward, halfSize.x, Colors.Forward, out var forwardDist, ref pressed ) )
-				{
-					resized = true;
-					resizeDist = forwardDist;
-					resizeAxis = Vector3.Forward;
-				}
+				if ( ArrowPoint( "Forward", Vector3.Forward, halfSize.x, Colors.Forward, out var fd, ref pressed ) )
+					(resizeDist, resizeAxis) = (fd, Vector3.Forward);
 
-				if ( ArrowPoint( "Backward", Vector3.Backward, halfSize.x, Colors.Forward, out var backwardDist, ref pressed ) )
-				{
-					resized = true;
-					resizeDist = backwardDist;
-					resizeAxis = Vector3.Backward;
-				}
+				if ( ArrowPoint( "Backward", Vector3.Backward, halfSize.x, Colors.Forward, out var bd, ref pressed ) )
+					(resizeDist, resizeAxis) = (bd, Vector3.Backward);
 
-				if ( ArrowPoint( "Up", Vector3.Up, halfSize.z, Colors.Up, out var upDist, ref pressed ) )
-				{
-					resized = true;
-					resizeDist = upDist;
-					resizeAxis = Vector3.Up;
-				}
+				if ( ArrowPoint( "Up", Vector3.Up, halfSize.z, Colors.Up, out var ud, ref pressed ) )
+					(resizeDist, resizeAxis) = (ud, Vector3.Up);
 
-				if ( ArrowPoint( "Down", Vector3.Down, halfSize.z, Colors.Up, out var downDist, ref pressed ) )
-				{
-					resized = true;
-					resizeDist = downDist;
-					resizeAxis = Vector3.Down;
-				}
+				if ( ArrowPoint( "Down", Vector3.Down, halfSize.z, Colors.Up, out var dd, ref pressed ) )
+					(resizeDist, resizeAxis) = (dd, Vector3.Down);
 
-				if ( ArrowPoint( "Left", Vector3.Left, halfSize.y, Colors.Left, out var leftDist, ref pressed ) )
-				{
-					resized = true;
-					resizeDist = leftDist;
-					resizeAxis = Vector3.Left;
-				}
+				if ( ArrowPoint( "Left", Vector3.Left, halfSize.y, Colors.Left, out var ld, ref pressed ) )
+					(resizeDist, resizeAxis) = (ld, Vector3.Left);
 
-				if ( ArrowPoint( "Right", Vector3.Right, halfSize.y, Colors.Left, out var rightDist, ref pressed ) )
-				{
-					resized = true;
-					resizeDist = rightDist;
-					resizeAxis = Vector3.Right;
-				}
+				if ( ArrowPoint( "Right", Vector3.Right, halfSize.y, Colors.Left, out var rd, ref pressed ) )
+					(resizeDist, resizeAxis) = (rd, Vector3.Right);
 
 				outPressed = pressed;
 
-				if ( resized && !resizeDist.AlmostEqual( 0 ) )
+				if ( !pressed )
 				{
-					var center = value.Center + resizeAxis * (resizeDist * 0.5f);
-					halfSize = value.Size + resizeAxis.Abs() * resizeDist;
-					outValue = BBox.FromPositionAndSize( center, halfSize );
-
-					return true;
+					_bbStart = value;
+					_bbDelta = default;
+					return false;
 				}
-			}
 
-			return false;
+				if ( resizeDist.AlmostEqual( 0 ) )
+					return false;
+
+				outResizeAxis = resizeAxis;
+
+				_bbDelta.Maxs += Vector3.Max( resizeAxis, Vector3.Zero ) * resizeDist;
+				_bbDelta.Mins += Vector3.Min( resizeAxis, Vector3.Zero ) * resizeDist;
+
+				var mins = _bbStart.Mins + _bbDelta.Mins;
+				var maxs = _bbStart.Maxs + _bbDelta.Maxs;
+
+				if ( Settings.SnapToGrid != IsCtrlPressed )
+				{
+					mins = Gizmo.Snap( mins, _bbDelta.Mins );
+					maxs = Gizmo.Snap( maxs, _bbDelta.Maxs );
+				}
+
+				outValue = new BBox { Mins = mins, Maxs = maxs };
+				return true;
+			}
 		}
 	}
 }
-
-
 

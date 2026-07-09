@@ -1,4 +1,5 @@
 ﻿using NativeEngine;
+using Sandbox.Engine;
 using System.Text.Json.Serialization;
 
 namespace Sandbox;
@@ -6,10 +7,15 @@ namespace Sandbox;
 /// <summary>
 /// A physics surface. This is applied to each <see cref="PhysicsShape">PhysicsShape</see> and controls its physical properties and physics related sounds.
 /// </summary>
-[AssetType( Name = "Surface Description", Extension = "surface", Category = "Physics", Flags = AssetTypeFlags.NoEmbedding )]
+[AssetType( Name = "Surface Description", Extension = "surface", Category = "Physics", Flags = AssetTypeFlags.NoEmbedding, IconColor = "#4596ec" )]
 public partial class Surface : GameResource
 {
-	internal static Dictionary<int, Surface> All = new Dictionary<int, Surface>();
+	/// <summary>
+	/// Per-context lookup of loaded surfaces by their physics index.
+	/// Each GlobalContext (Menu, Game) owns its own dictionary so that
+	/// game-session teardown never clears entries belonging to the menu.
+	/// </summary>
+	internal static Dictionary<int, Surface> All => GlobalContext.Current.Surfaces;
 
 	[Hide]
 	[JsonIgnore]
@@ -106,6 +112,14 @@ public partial class Surface : GameResource
 		Create( true );
 	}
 
+	protected override void OnDestroy()
+	{
+		if ( All.TryGetValue( Index, out var v ) && v == this )
+		{
+			All.Remove( Index );
+		}
+	}
+
 	void Create( bool reload = false )
 	{
 		var controller = g_pPhysicsSystem.GetSurfacePropertyController();
@@ -130,6 +144,8 @@ public partial class Surface : GameResource
 		All[Index] = this;
 	}
 
+	static readonly Surface _defaultSurface = new();
+
 	/// <summary>
 	/// Find a surface by its index in the array. This is the fastest way to lookup, so it's
 	/// passed from things like Traces since the index is going to be the same. It's important to
@@ -146,7 +162,7 @@ public partial class Surface : GameResource
 			return v.Value;
 		}
 
-		throw new System.Exception( "Default Surface not found!" );
+		return _defaultSurface;
 	}
 
 	/// <summary>

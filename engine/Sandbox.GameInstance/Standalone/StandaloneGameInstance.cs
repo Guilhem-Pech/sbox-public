@@ -83,21 +83,18 @@ internal partial class StandaloneGameInstance : GameInstance
 		LoadProjectSettings();
 
 		Log.Trace( $"Loading GameResources" );
-		ResourceLoader.LoadAllGameResource( FileSystem.Mounted );
+		await ResourceLoader.LoadAllGameResourceAsync( FileSystem.Mounted, token );
 
 		Log.Trace( $"Loading Fonts" );
 		FontManager.Instance.LoadAll( FileSystem.Mounted );
 
-		// Create a filesystem and initialize the localization
+		// Initialize localization
+		Game.Language = new LanguageContainer();
+		var localizationPath = System.IO.Path.Combine( Standalone.GamePath, "Localization" );
+		if ( System.IO.Directory.Exists( localizationPath ) )
 		{
-			var localizationFolder = new AggregateFileSystem();
-			var localizationPath = System.IO.Path.Combine( Standalone.GamePath, "Localization" );
-
-			if ( System.IO.Directory.Exists( localizationPath ) )
-			{
-				localizationFolder.CreateAndMount( localizationPath );
-			}
-			Game.Language = new LanguageContainer( localizationFolder );
+			Game.Language.FileSystem.CreateAndMount( localizationPath );
+			Game.Language.Refresh();
 		}
 
 		SetupFileWatch();
