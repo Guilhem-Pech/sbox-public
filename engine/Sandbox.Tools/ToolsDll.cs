@@ -45,7 +45,6 @@ internal class ToolsDll : IToolsDll
 
 	public void Exiting()
 	{
-		Editor.Mcp.McpServer.Stop();
 		EditorEvent.Run( "app.exit" );
 		EditorCookie?.Save();
 		ProjectCookie?.Save();
@@ -78,6 +77,21 @@ internal class ToolsDll : IToolsDll
 			return;
 
 		EditorScene.Stop();
+	}
+
+	public void SetPlaying()
+	{
+		if ( Game.ActiveScene is null || !Game.ActiveScene.IsValid() )
+		{
+			return;
+		}
+
+		// Just incase we are ingame currently using the "connect" command we just stop the current session and start a new one, 
+		// so we dont end up with dupe GameSession
+		var sceneEditorSession = SceneEditorSession.All.FirstOrDefault( x => x.IsPlaying );
+		sceneEditorSession?.StopPlaying();
+
+		EditorScene.Play( true );
 	}
 
 	/// <summary>

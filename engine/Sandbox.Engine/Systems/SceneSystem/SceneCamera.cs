@@ -69,26 +69,19 @@ public sealed partial class SceneCamera : IDisposable, IManagedCamera
 	internal Action<Rendering.Stage, SceneCamera> OnRenderStageHook;
 
 	/// <summary>
-	/// Called when rendering the post process pass
-	/// </summary>
-	[Obsolete]
-	public Action OnRenderPostProcess { get; set; }
-
-	/// <summary>
-	/// Called when rendering the transparent pass
-	/// </summary>
-	[Obsolete]
-	public Action OnRenderOpaque { get; set; }
-
-	/// <summary>
 	/// Called when rendering the transparent pass
 	/// </summary>
 	[Obsolete]
 	public Action OnRenderTransparent { get; set; }
 
-	public Action OnRenderOverlay { get; set; }
+	internal Action OnRenderOverlay { get; set; }
 
-	public Action OnRenderUI { get; set; }
+	internal Action OnRenderUI { get; set; }
+
+	/// <summary>
+	/// Called before post processing, for UI that wants bloom and color grading applied to it.
+	/// </summary>
+	internal Action OnRenderUIBeforePostProcess { get; set; }
 
 	/// <summary>
 	/// The size of the screen. Allows us to work out aspect ratio.
@@ -520,6 +513,14 @@ public sealed partial class SceneCamera : IDisposable, IManagedCamera
 	}
 
 	/// <summary>
+	/// This camera only draws UI - skip the scene rendering pipeline entirely and put the UI
+	/// straight onto its target. For a window that is nothing but panels, which is what a
+	/// launcher window is: the pipeline's passes and render targets are all for a scene that
+	/// isn't there.
+	/// </summary>
+	internal bool UIOnly { get; set; }
+
+	/// <summary>
 	/// Should be called before a render
 	/// </summary>
 	internal void OnPreRender( Vector2 size )
@@ -546,13 +547,28 @@ public sealed partial class SceneCamera : IDisposable, IManagedCamera
 	{
 		switch ( renderStage )
 		{
+			case Rendering.Stage.AfterDepthPrepass:
+				{
+					// Light shadow-mask command lists (screen-space contact shadows) only need the
+					// full-res depth buffer, and this stage already runs per view with a valid.
+					ShadowMapperCallbacks.RenderScreenSpaceShadows();
+					break;
+				}
+
+			case Rendering.Stage.EarlyUI:
+				{
+					if ( RenderUI )
+						OnRenderUIBeforePostProcess?.Invoke();
+					break;
+				}
+
 			case Rendering.Stage.AfterPostProcess:
 				{
 					OnRenderOverlay?.Invoke();
 					break;
 				}
 
-			case Rendering.Stage.AfterUI:
+			case Rendering.Stage.UI:
 				{
 					OnRenderUI?.Invoke();
 					break;
@@ -561,6 +577,13 @@ public sealed partial class SceneCamera : IDisposable, IManagedCamera
 
 		// new stuff is commandlist based, so is total thread safe
 		OnRenderStageHook?.InvokeWithWarning( renderStage, this );
+
+		// Editor viewports don't use the game UI render hook, so capture the selected camera after its UI stage.
+		if ( renderStage == Rendering.Stage.AfterUI && IsRecordingCamera && Application.IsEditor && !Game.IsPlaying )
+		{
+			ScreenCaptureUtility.CaptureFrame();
+			ScreenCaptureUtility.DrawRecordingBorder();
+		}
 	}
 
 	/// <summary>

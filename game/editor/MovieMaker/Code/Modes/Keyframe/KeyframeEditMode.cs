@@ -14,7 +14,17 @@ public sealed partial class KeyframeEditMode : EditMode
 	public bool AutoCreateTracks { get; set; }
 	public bool CreateKeyframeOnClick { get; set; }
 
-	public KeyframeInterpolation DefaultInterpolation { get; set; } = KeyframeInterpolation.Cubic;
+	private KeyframeInterpolation _defaultInterpolation;
+
+	public KeyframeInterpolation DefaultInterpolation
+	{
+		get => _defaultInterpolation;
+		set
+		{
+			_defaultInterpolation = value;
+			Session.Cookies.KeyframeInterpolation = value;
+		}
+	}
 
 	public IEnumerable<KeyframeHandle> SelectedKeyframes => Timeline.SelectedItems.OfType<KeyframeHandle>();
 
@@ -24,6 +34,8 @@ public sealed partial class KeyframeEditMode : EditMode
 
 	protected override void OnEnable()
 	{
+		_defaultInterpolation = Session.Cookies.KeyframeInterpolation;
+
 		var changesGroup = ToolBar.AddGroup();
 
 		var button = changesGroup.AddToggle( new( "Automatic Track Creation", "playlist_add",
@@ -75,30 +87,17 @@ public sealed partial class KeyframeEditMode : EditMode
 
 	public override bool AllowTrackCreation => AutoCreateTracks;
 
-	private sealed record KeyframeChangeScope( string Name, TrackView? TrackView, IHistoryScope HistoryScope ) : IDisposable
-	{
-		public void Dispose() => HistoryScope.Dispose();
-	}
-
-	private KeyframeChangeScope? _changeScope;
-
-	private IHistoryScope GetKeyframeChangeScope( string name, TrackView? trackView = null )
-	{
-		if ( _changeScope is { } scope && scope.TrackView == trackView && scope.Name == name ) return _changeScope.HistoryScope;
-
-		_changeScope = new KeyframeChangeScope( name, trackView,
-			Session.History.Push( trackView is null ? $"{name} Keyframes" : $"{name} Keyframes ({trackView.Track.Name})" ) );
-
-		return _changeScope.HistoryScope;
-	}
-
-	private void ClearKeyframeChangeScope()
-	{
-		_changeScope = null;
-	}
+	private IHistoryScope? _changeScope;
+	private bool _keyframeChangeInProgress;
 
 	protected override bool OnPreChange( TrackView view )
 	{
+		if ( !_keyframeChangeInProgress )
+		{
+			_keyframeChangeInProgress = true;
+			_changeScope = Session.History.Push( "Change Keyframe Value" );
+		}
+
 		// Touching a property should create a keyframe
 
 		return CreateOrUpdateKeyframeHandle( view, new Keyframe( Session.PlayheadTime, view.Target.Value, DefaultInterpolation, default ) );
@@ -106,9 +105,22 @@ public sealed partial class KeyframeEditMode : EditMode
 
 	protected override bool OnPostChange( TrackView view )
 	{
+		_keyframeChangeInProgress = false;
+
 		// We've finished changing a property, update the keyframe we created in OnPreChange
 
-		return CreateOrUpdateKeyframeHandle( view, new Keyframe( Session.PlayheadTime, view.Target.Value, DefaultInterpolation, default ) );
+		if ( !CreateOrUpdateKeyframeHandle( view, new Keyframe( Session.PlayheadTime, view.Target.Value, DefaultInterpolation, default ) ) )
+		{
+			return false;
+		}
+
+		if ( _changeScope is { IsClosed: false } scope )
+		{
+			scope.PostChange();
+		}
+
+		return true;
+
 	}
 
 	private void OnSelectionChanged()
@@ -308,8 +320,6 @@ public sealed partial class KeyframeEditMode : EditMode
 		var writeableViews = GetWritableDescendantTrackViews( parentTimelineTrack.View ).ToImmutableArray();
 
 		if ( writeableViews.Length == 0 ) return;
-
-		ClearKeyframeChangeScope();
 
 		using var scope = Session.History.Push( $"Add {(writeableViews.Length > 1 ? $"{writeableViews.Length} " : "")}" + $"Keyframe{(writeableViews.Length > 1 ? "s" : "")}" );
 

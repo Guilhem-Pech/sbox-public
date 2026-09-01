@@ -90,20 +90,6 @@ public partial class ProjectPublisher
 			await Task.Delay( 10 );
 			cancel.ThrowIfCancellationRequested();
 
-			//
-			// If we're a game, include content from /addons/base/code/
-			// This versions things like the styles and dev ui, which is only
-			// going to work with the shipped base code.
-			//
-			if ( project.Config.Type == "game" )
-			{
-				progress?.SetProgressMessage( "Collecting base code assets" );
-				await IncludeFiles( FileSystem.Root.GetFullPath( "/addons/base/code/" ), "*", cancel );
-			}
-
-			await Task.Delay( 10 );
-			cancel.ThrowIfCancellationRequested();
-
 
 			//
 			// Search the code path for files
@@ -158,12 +144,16 @@ public partial class ProjectPublisher
 		{
 			Assets.Clear();
 
-			var assetList = new List<Asset>();
-			assetList.Add( singleAsset );
+			var assetList = new List<Asset>
+			{
+				singleAsset
+			};
 
 			await CollectAssets( assetList, cancel );
 
-			if ( project is not null )
+			var includeCode = singleAsset.Publishing.BuildPublishContext().IncludeCode;
+
+			if ( project is not null && includeCode )
 			{
 				foreach ( var path in AllCodePaths( project ) )
 				{

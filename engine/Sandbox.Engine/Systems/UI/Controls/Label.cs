@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components;
 using Sandbox.Html;
 using System.Globalization;
 
@@ -23,6 +23,11 @@ namespace Sandbox.UI
 		int layoutStateHash;
 		bool sizeFinalized;
 		Vector2 availableSpace;
+
+		/// <summary>
+		/// A background-clip: text at or above this label is painting its glyphs, so it doesn't draw them itself.
+		/// </summary>
+		bool clipsBackgroundToText;
 
 		[Category( "Selection" )]
 		public bool ShouldDrawSelection
@@ -203,10 +208,29 @@ namespace Sandbox.UI
 			Text = value ?? "";
 		}
 
+		private int _caretPosition;
+
 		/// <summary>
 		/// Position of the text cursor/caret within the text, at which newly typed characters are inserted.
+		/// Setting it keeps it inside the text and scrolls to put it on screen - everything that moves
+		/// the caret goes through here, so nothing has to remember to do either.
 		/// </summary>
-		public int CaretPosition { get; set; }
+		public int CaretPosition
+		{
+			get => _caretPosition;
+			set
+			{
+				value = value.Clamp( 0, TextLength );
+				if ( _caretPosition == value ) return;
+
+				_caretPosition = value;
+
+				// Moving the caret any other way gives up the x that up and down were aiming for
+				if ( !_movingLine ) _desiredCaretX = null;
+
+				ScrollToCaret();
+			}
+		}
 
 		/// <summary>
 		/// Amount of characters in the text of the text entry. Not bytes.
@@ -233,6 +257,9 @@ namespace Sandbox.UI
 				SelectionEnd = TextLength;
 				ScrollToCaret();
 			}
+
+			// The text can shrink out from under the scroll offset without the caret moving at all
+			ClampScroll();
 		}
 
 		/// <summary>
@@ -292,10 +319,11 @@ namespace Sandbox.UI
 			{
 				_textBlock = new TextBlock();
 				_textBlock.LookupStyles = HtmlStyleLookup;
-				_textBlock.OnTextureChanged = MarkRenderDirty;
+				_textBlock.OnTextureChanged = TextTextureChanged;
 			}
 
 			_textBlock.NoWrap = !Multiline;
+			clipsBackgroundToText = cascade.ClipBackgroundToText || ComputedStyle.BackgroundClip == BackgroundClip.Text;
 
 			if ( IsRich )
 			{
@@ -320,6 +348,41 @@ namespace Sandbox.UI
 				YogaNode.MarkDirty();
 				sizeFinalized = false;
 			}
+		}
+
+		/// <summary>
+		/// Where the text is laid out, which scrolls with the caret in a text entry.
+		/// </summary>
+		Rect TextLayoutRect => new Rect( Box.RectInner.Position - caretScroll, Box.RectInner.Size );
+
+		/// <summary>
+		/// The panel clipping its background to this text holds the texture in its own descriptor,
+		/// so it rebuilds when the text is rerendered.
+		/// </summary>
+		void TextTextureChanged()
+		{
+			MarkRenderDirty();
+
+			if ( !clipsBackgroundToText ) return;
+
+			for ( var panel = Parent; panel is not null; panel = panel.Parent )
+			{
+				panel.MarkRenderDirty();
+				if ( panel.ComputedStyle?.BackgroundClip == BackgroundClip.Text ) break;
+			}
+		}
+
+		/// <summary>
+		/// The rendered text this label lends to a background-clip: text, and where it sits.
+		/// </summary>
+		internal bool GetTextMask( out Texture texture, out Rect rect )
+		{
+			texture = null;
+			rect = default;
+
+			if ( !clipsBackgroundToText || _textBlock is null || ComputedStyle is null ) return false;
+
+			return _textBlock.GetMask( ComputedStyle, TextLayoutRect, out texture, out rect );
 		}
 
 		private Styles HtmlStyleLookup( INode node )
@@ -374,6 +437,14 @@ namespace Sandbox.UI
 				YogaNode.MarkDirty();
 			}
 
+			// The visible width is what scrolling measures against, so a resize - or the first
+			// layout, where there wasn't one yet - has to put the caret back on screen
+			if ( _scrolledSize != Box.RectInner.Size )
+			{
+				_scrolledSize = Box.RectInner.Size;
+				ScrollToCaret();
+			}
+
 			_textRect = Box.RectInner;
 
 			if ( ComputedStyle.TextAlign == TextAlign.Center )
@@ -405,9 +476,9 @@ namespace Sandbox.UI
 				_textBlock.SizeFinalized( Box.RectInner.Width, Box.RectInner.Height );
 			}
 
-			var rect = Box.RectInner;
-			rect.Position -= caretScroll;
-			_textBlock?.BuildDescriptors( CachedDescriptors, CachedOverrideBlendMode, ComputedStyle, rect, CachedRenderOpacity );
+			if ( clipsBackgroundToText ) return;
+
+			_textBlock?.BuildDescriptors( CachedDescriptors, CachedOverrideBlendMode, ComputedStyle, TextLayoutRect, CachedRenderOpacity );
 		}
 
 		public int GetLetterAt( Vector2 pos )

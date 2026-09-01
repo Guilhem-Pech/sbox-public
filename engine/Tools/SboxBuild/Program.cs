@@ -35,10 +35,10 @@ internal class Program
 		AddUploadSteamCommand( rootCommand );
 		AddDiscordPostCommand( rootCommand );
 		AddDownloadPublicArtifactsCommand( rootCommand );
+		AddDownloadThirdPartyCommand( rootCommand );
 		AddUploadBuildArtifactsCommand( rootCommand );
 		AddCheckNativeTouchedCommand( rootCommand );
 		AddNotifySlackCommand( rootCommand );
-		AddUploadReferenceAssembliesCommand( rootCommand );
 		AddReportBuildCommand( rootCommand );
 
 		rootCommand.Invoke( args );
@@ -130,11 +130,15 @@ internal class Program
 		var cmd = new Command( "generate-solutions", "Generate Visual Studio solutions without building them" );
 		var configOption = new Option<BuildConfiguration>( "--config",
 			getDefaultValue: () => BuildConfiguration.Developer );
+		var moduleOption = new Option<string>( "--module", getDefaultValue: () => null );
+		var platformOption = new Option<string>( "--platform", getDefaultValue: () => null );
 		cmd.AddOption( configOption );
-		cmd.SetHandler( ( BuildConfiguration config ) =>
+		cmd.AddOption( moduleOption );
+		cmd.AddOption( platformOption );
+		cmd.SetHandler( ( BuildConfiguration config, string module, string platform ) =>
 		{
-			Environment.ExitCode = (int)new GenerateSolutions( config ).Run();
-		}, configOption );
+			Environment.ExitCode = (int)new GenerateSolutions( config, module, platform ).Run();
+		}, configOption, moduleOption, platformOption );
 		rootCommand.Add( cmd );
 	}
 
@@ -259,6 +263,20 @@ internal class Program
 		rootCommand.Add( cmd );
 	}
 
+	private static void AddDownloadThirdPartyCommand( RootCommand rootCommand )
+	{
+		var cmd = new Command( "download-thirdparty", "Download third party dependencies built by sbox-thirdparty" );
+		var forceOption = new Option<bool>( "--force",
+			description: "Re-download even if the current release is already extracted",
+			getDefaultValue: () => false );
+		cmd.AddOption( forceOption );
+		cmd.SetHandler( ( bool force ) =>
+		{
+			Environment.ExitCode = (int)new DownloadThirdParty( force ).Run();
+		}, forceOption );
+		rootCommand.Add( cmd );
+	}
+
 	private static void AddUploadBuildArtifactsCommand( RootCommand rootCommand )
 	{
 		var cmd = new Command( "upload-build-artifacts", "Package a runnable build into a zip and upload it to R2" );
@@ -293,27 +311,20 @@ internal class Program
 	private static void AddReportBuildCommand( RootCommand rootCommand )
 	{
 		var cmd = new Command( "report-build", "Report this build to the backend Test Lab (idempotent by commit)" );
-		cmd.SetHandler( () => { Environment.ExitCode = (int)new ReportBuild().Run(); } );
-		rootCommand.Add( cmd );
-	}
 
-	private static void AddUploadReferenceAssembliesCommand( RootCommand rootCommand )
-	{
-		var cmd = new Command( "upload-reference-assemblies", "Package the managed reference assemblies and upload them to the backend" );
-
-		var targetOption = new Option<BuildTarget>(
-			"--target",
-			description: "Target environment / channel (Staging or Release)",
+		var targetOption = new Option<BuildTarget>( "--target",
+			description: "Channel this build targets (Staging/Release); only marks the channel's current build when pushed to Steam",
 			getDefaultValue: () => BuildTarget.Staging );
 
 		cmd.AddOption( targetOption );
 
 		cmd.SetHandler( ( BuildTarget target ) =>
 		{
-			Environment.ExitCode = (int)new UploadReferenceAssemblies( target ).Run();
+			Environment.ExitCode = (int)new ReportBuild( target ).Run();
 		}, targetOption );
 
 		rootCommand.Add( cmd );
 	}
+
 }
 

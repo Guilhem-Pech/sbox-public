@@ -328,6 +328,55 @@ public sealed class BinderTest : SceneTestBase
 		Assert.AreEqual( new Vector3( 10f, 20f, 30f ), component.List[0] );
 	}
 
+	private static ITrackProperty<GameObjectFlags> CreateFlagsTarget()
+	{
+		return TrackBinder.Default.Get( MovieClip.RootGameObject( "Example" ).Property<GameObjectFlags>( nameof( GameObject.Flags ) ) );
+	}
+
+	[TestMethod]
+	public void FlagsEnumExisting()
+	{
+		var flagsTarget = CreateFlagsTarget();
+		var absoluteTarget = TrackProperty.Create( flagsTarget, nameof( GameObjectFlags.Absolute ) );
+
+		Assert.IsNotNull( absoluteTarget );
+		Assert.AreEqual( typeof( bool ), absoluteTarget.TargetType );
+	}
+
+	[TestMethod]
+	public void FlagsEnumNonExisting()
+	{
+		var flagsTarget = CreateFlagsTarget();
+
+		Assert.IsNull( TrackProperty.Create( flagsTarget, "DefinitelyNotReal" ) );
+	}
+
+	/// <summary>
+	/// Edge case: don't create properties for 0-valued enum members.
+	/// </summary>
+	[TestMethod]
+	public void FlagsEnumForbidNone()
+	{
+		var flagsTarget = CreateFlagsTarget();
+
+		Assert.IsNull( TrackProperty.Create( flagsTarget, nameof( GameObjectFlags.None ) ) );
+	}
+
+	[TestMethod]
+	public void FlagsEnumGetAll()
+	{
+		var flagsTarget = CreateFlagsTarget();
+		var names = TrackProperty.GetAll( flagsTarget ).Select( x => x.Name ).ToArray();
+
+		foreach ( var name in names )
+		{
+			Console.WriteLine( name );
+		}
+
+		Assert.IsTrue( names.Contains( nameof( GameObjectFlags.Absolute ) ) );
+		Assert.IsFalse( names.Contains( nameof( GameObjectFlags.None ) ) );
+	}
+
 	[TestMethod]
 	public void LineRendererVectorPointsProperty()
 	{
@@ -647,6 +696,45 @@ public sealed class BinderTest : SceneTestBase
 		Assert.IsTrue( target.IsBound );
 	}
 
+	/// <summary>
+	/// Edge case for multiple GameObject.Enabled tracks being bound to the same object.
+	/// Enabled tracks default to <c>false</c> outside of a block, but we need to make
+	/// sure this works across multiple tracks.
+	/// </summary>
+	[TestMethod]
+	public void MultipleEnableTracks()
+	{
+		var goTrack = MovieClip.RootGameObject( "Example" );
+
+		var track1 = goTrack
+			.Property<bool>( nameof( GameObject.Enabled ) )
+			.WithConstant( (1.0, 2.0), true );
+
+		var track2 = goTrack
+			.Property<bool>( nameof( GameObject.Enabled ) )
+			.WithConstant( (3.0, 4.0), true );
+
+		var clip = MovieClip.FromTracks( goTrack, track1, track2 );
+		var exampleObject = new GameObject( true, "Example" );
+
+		Assert.IsTrue( TrackBinder.Default.Get( track1 ).IsBound );
+		Assert.AreEqual( TrackBinder.Default.Get( track1 ), TrackBinder.Default.Get( track2 ) );
+
+		clip.Update( 0.5, TrackBinder.Default );
+		Assert.IsFalse( exampleObject.Enabled );
+
+		clip.Update( 1.5, TrackBinder.Default );
+		Assert.IsTrue( exampleObject.Enabled );
+
+		clip.Update( 2.5, TrackBinder.Default );
+		Assert.IsFalse( exampleObject.Enabled );
+
+		clip.Update( 3.5, TrackBinder.Default );
+		Assert.IsTrue( exampleObject.Enabled );
+
+		clip.Update( 4.5, TrackBinder.Default );
+		Assert.IsFalse( exampleObject.Enabled );
+	}
 }
 
 public class ExampleComponent : Component

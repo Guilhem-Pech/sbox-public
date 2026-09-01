@@ -610,3 +610,39 @@ public enum ObjectFit
 	/// </summary>
 	None
 }
+
+/// <summary>
+/// Possible values for the "isolation" CSS rule, dictating whether an element creates a new stacking context.
+/// </summary>
+public enum Isolation
+{
+	/// <summary>
+	/// A new stacking context is created only if one of the other properties that trigger the creation of a
+	/// stacking context is present (eg. a non-zero z-index, a filter, a mask, etc).
+	/// </summary>
+	Auto,
+
+	/// <summary>
+	/// Forces the creation of a new stacking context, even if none of the other stacking-context-triggering
+	/// properties are present.
+	/// </summary>
+	Isolate
+}
+
+/// <summary>
+/// Possible values for the <c>background-clip</c> CSS property, deciding how far the background is painted.
+/// </summary>
+public enum BackgroundClip
+{
+	/// <summary>Painted over the whole element, borders included.</summary>
+	BorderBox = 0,
+
+	/// <summary>Stops at the inside edge of the border.</summary>
+	PaddingBox = 1,
+
+	/// <summary>Stops at the inside edge of the padding.</summary>
+	ContentBox = 2,
+
+	/// <summary>Painted only where the element's text is, so the text shows through the glyphs.</summary>
+	Text = 3
+}

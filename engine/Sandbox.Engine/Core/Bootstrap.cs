@@ -55,7 +55,6 @@ internal static class Bootstrap
 			{
 				using var timerFs = StartupTiming?.ScopeTimer( "FilesystemInit" );
 
-				EngineFileSystem.InitializeAddonsFolder();
 				EngineFileSystem.InitializeDataFolder();
 
 				if ( !Application.IsStandalone )
@@ -282,7 +281,9 @@ internal static class Bootstrap
 	{
 		Environment.CurrentDirectory = rootFolder;
 
-		Sandbox.Utility.Steam.InitializeClient();
+		if ( !Application.IsDedicatedServer )
+			Sandbox.Utility.Steam.InitializeClient();
+
 		ThreadSafe.MarkMainThread();
 
 		ThreadPool.SetMinThreads( Environment.ProcessorCount, Environment.ProcessorCount );

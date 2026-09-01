@@ -77,6 +77,11 @@ file sealed record MemberProperty<T>( ITrackTarget Parent, MemberDescription Mem
 		};
 	}
 
+	private bool IsEnabledProperty => Parent is ITrackReference && Member.Name == nameof( GameObject.Enabled ) && typeof( T ) == typeof( bool );
+
+	bool ITrackProperty.HasDefaultValue => IsEnabledProperty;
+	T ITrackProperty<T>.DefaultValue => IsEnabledProperty ? (T)(object)false : default!;
+
 	[SkipHotload]
 	private static readonly ReflectionCache<MemberInfo, Func<object, T>> GetValueDelegateCache = new( BuildGetValueDelegate );
 
@@ -265,7 +270,9 @@ file sealed class MemberPropertyFactory : ITrackPropertyFactory
 	[
 		typeof( SkinnedModelRenderer.MorphAccessor ),
 		typeof( SkinnedModelRenderer.ParameterAccessor ),
-		typeof( SkinnedModelRenderer.SequenceAccessor )
+		typeof( SkinnedModelRenderer.SequenceAccessor ),
+		typeof( GameTags ),
+		typeof( TagSet )
 	];
 
 	private static Dictionary<Type, HashSet<string>> AllowedComponentProperties { get; } = new()

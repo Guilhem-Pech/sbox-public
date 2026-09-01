@@ -27,6 +27,12 @@ internal sealed class TextBlock : IDisposable
 
 	public Vector2 BlockSize;
 
+	/// <summary>
+	/// The size the text measures to right now. Unlike <see cref="BlockSize"/> this doesn't wait
+	/// on the texture being built, so layout and scrolling can ask about size at any point.
+	/// </summary>
+	public Vector2 MeasuredSize => Block is null ? default : new Vector2( Block.MeasuredWidth, Block.MeasuredHeight );
+
 	internal Texture Texture;
 
 	// we keep the last texture around incase we can re-use it
@@ -64,6 +70,12 @@ internal sealed class TextBlock : IDisposable
 	Topten.RichTextKit.Style Style;
 	Topten.RichTextKit.TextGradient Gradient;
 
+	/// <summary>
+	/// Any colour in the block has a channel above 1. Rasterized to a float surface so the
+	/// values survive to the shader instead of clamping in 8-bit.
+	/// </summary>
+	bool IsHdr;
+
 	int FontHash;
 	//int ParentHash;
 
@@ -85,7 +97,16 @@ internal sealed class TextBlock : IDisposable
 	GradientInfo GradientInfo;
 	FontSmooth Smooth;
 
+	/// <summary>
+	/// Room shadows and outlines need around the text
+	/// </summary>
 	Margin EffectMargin;
+
+	/// <summary>
+	/// Room around the text in the current texture: effects plus glyph ink overhang. Texture is placed at the
+	/// text rect minus this.
+	/// </summary>
+	Margin TextureMargin;
 
 
 	Dictionary<int, Vector2> SizeCache = new Dictionary<int, Vector2>();
@@ -95,7 +116,8 @@ internal sealed class TextBlock : IDisposable
 		if ( !float.IsNaN( width ) ) width = width.CeilToInt();
 		if ( !float.IsNaN( height ) ) height = height.CeilToInt();
 
-		var hash = (int)width;
+		// Height only matters when text-overflow clips to it
+		var hash = HashCode.Combine( (int)width, TextOverflow != TextOverflow.None ? (int)height : 0 );
 		if ( SizeCache.TryGetValue( hash, out var size ) )
 			return size;
 
@@ -131,6 +153,31 @@ internal sealed class TextBlock : IDisposable
 		if ( Texture is null ) return;
 		if ( BlockSize == 0 ) return;
 
+		var color = Color.White;
+		color.a *= opacity;
+
+		if ( color.a <= 0 ) return;
+
+		var rect = GetTextureRect( currentStyle, textrect );
+
+		var desc = new BoxDrawDescriptor( rect, new Color( 0, 0, 0, 0 ) )
+		{
+			BackgroundImage = Texture,
+			BackgroundRect = new Vector4( 0, 0, rect.Width, rect.Height ),
+			BackgroundTint = color,
+			BackgroundRepeat = BackgroundRepeat.Clamp,
+			OverrideBlendMode = blendMode,
+			FilterMode = TextFilter,
+		};
+
+		target.AddBox( desc );
+	}
+
+	/// <summary>
+	/// Where the rendered texture sits, given the rect the text is laid out in.
+	/// </summary>
+	Rect GetTextureRect( Styles currentStyle, Rect textrect )
+	{
 		if ( currentStyle.TextAlign == TextAlign.Center )
 		{
 			textrect.Left += (textrect.Width - BlockSize.x) * 0.5f;
@@ -150,29 +197,28 @@ internal sealed class TextBlock : IDisposable
 		}
 
 		textrect.Size = Texture.Size;
-		textrect.Position -= EffectMargin.Position;
+		textrect.Position -= TextureMargin.Position;
 
-		var color = Color.White;
-		color.a *= opacity;
-
-		if ( color.a <= 0 ) return;
-
-		var rect = textrect.Floor();
-
-		var desc = new BoxDrawDescriptor( rect, new Color( 0, 0, 0, 0 ) )
-		{
-			BackgroundImage = Texture,
-			BackgroundRect = new Vector4( 0, 0, rect.Width, rect.Height ),
-			BackgroundTint = color,
-			OverrideBlendMode = blendMode == BlendMode.Normal ? BlendMode.PremultipliedAlpha : blendMode,
-			PremultiplyAlpha = true,
-			FilterMode = TextFilter,
-		};
-
-		target.AddBox( desc );
+		return textrect.Floor();
 	}
 
+	/// <summary>
+	/// The rendered text and where it sits, for background-clip: text to use as its mask.
+	/// </summary>
+	internal bool GetMask( Styles currentStyle, Rect textrect, out Texture texture, out Rect rect )
+	{
+		WaitTextureReady();
 
+		texture = null;
+		rect = default;
+
+		if ( Texture is null || BlockSize == 0 ) return false;
+
+		texture = Texture;
+		rect = GetTextureRect( currentStyle, textrect );
+
+		return true;
+	}
 
 	public Rect CaretRect( int caretPosition )
 	{
@@ -256,12 +302,14 @@ internal sealed class TextBlock : IDisposable
 
 		Style ??= new Style();
 
+		IsHdr = fontColor.IsHdr;
+
 		Style.FontFamily = fontFamily;
 		Style.FontSize = FontSize;
 		Style.FontWeight = FontWeight ?? 400;
 		Style.FontItalic = FontStyle != FontStyle.None;
 		Style.FontVariantNumeric = FontVariantNumeric ?? UI.FontVariantNumeric.Normal;
-		Style.TextColor = fontColor.ToSk();
+		Style.TextColor = fontColor.ToSkF();
 		Style.Underline = UnderlineStyle.None;
 		Style.StrokeInkSkip = style.TextDecorationSkipInk == TextSkipInk.All;
 		Style.UnderlineOffset = style.TextUnderlineOffset.Value.GetPixels( 100 );
@@ -290,7 +338,9 @@ internal sealed class TextBlock : IDisposable
 				break;
 		}
 
-		Style.UnderlineColor = (style.TextDecorationColor ?? fontColor).ToSk();
+		var decorationColor = style.TextDecorationColor ?? fontColor;
+		IsHdr |= decorationColor.IsHdr;
+		Style.UnderlineColor = decorationColor.ToSkF();
 		Style.StrokeThickness = style.TextDecorationThickness?.GetPixels( 100.0f );
 		Style.Underline |= (TextDecoration & UI.TextDecoration.Underline) != 0 ? UnderlineStyle.Gapped : UnderlineStyle.None;
 		Style.Underline |= (TextDecoration & UI.TextDecoration.Overline) != 0 ? UnderlineStyle.Overline : UnderlineStyle.None;
@@ -306,8 +356,9 @@ internal sealed class TextBlock : IDisposable
 
 		if ( !style.TextGradient.ColorOffsets.IsDefaultOrEmpty )
 		{
-			var colors = style.TextGradient.ColorOffsets.Select( x => SkiaCompat.ToSk( x.color ) ).ToArray();
+			var colors = style.TextGradient.ColorOffsets.Select( x => x.color.ToSkF() ).ToArray();
 			var stops = style.TextGradient.ColorOffsets.Select( x => x.offset.Value ).ToArray();
+			IsHdr |= style.TextGradient.ColorOffsets.Any( x => x.color.IsHdr );
 
 			if ( style.TextGradient.GradientType == GradientInfo.GradientTypes.Linear )
 			{
@@ -324,7 +375,8 @@ internal sealed class TextBlock : IDisposable
 		{
 			foreach ( var shadow in style.TextShadow )
 			{
-				var effect = TextEffect.DropShadow( shadow.Color.ToSk(), shadow.OffsetX, shadow.OffsetY, shadow.Blur );
+				IsHdr |= shadow.Color.IsHdr;
+				var effect = TextEffect.DropShadow( shadow.Color.ToSkF(), shadow.OffsetX, shadow.OffsetY, shadow.Blur );
 				effect.Width = 0;
 				effect.BlurSize = MathF.Max( effect.BlurSize, 0.01f );
 				Style.AddEffect( effect );
@@ -343,7 +395,8 @@ internal sealed class TextBlock : IDisposable
 			var color = style.TextStrokeColor ?? style.FontColor ?? Color.Black;
 
 			var size = style.TextStrokeWidth.Value.GetPixels( 1.0f );
-			var effect = TextEffect.Outline( color.ToSk(), size );
+			IsHdr |= color.IsHdr;
+			var effect = TextEffect.Outline( color.ToSkF(), size );
 			effect.StrokeMiter = 2.0f;
 			effect.StrokeJoin = SKStrokeJoin.Round;
 			Style.AddEffect( effect );
@@ -387,11 +440,12 @@ internal sealed class TextBlock : IDisposable
 
 						var sty = Style.Copy();
 
-						sty.FontSize = (style.FontSize ?? Length.Pixels( 13 ).Value).GetPixels( 100 );
-						sty.FontSize = MathF.Round( FontSize * 32.0f ) / 32.0f;
+						sty.FontSize = (s.FontSize ?? style.FontSize ?? Length.Pixels( 13 ).Value).GetPixels( 100 );
+						sty.FontSize = MathF.Round( sty.FontSize * 32.0f ) / 32.0f;
 						sty.FontFamily = s.FontFamily;
-						sty.TextColor = s.FontColor?.ToSk() ?? sty.TextColor;
-						sty.BackgroundColor = s.BackgroundColor?.ToSk() ?? sty.BackgroundColor;
+						sty.TextColor = s.FontColor?.ToSkF() ?? sty.TextColor;
+						sty.BackgroundColor = s.BackgroundColor?.ToSkF() ?? sty.BackgroundColor;
+						IsHdr |= (s.FontColor?.IsHdr ?? false) || (s.BackgroundColor?.IsHdr ?? false);
 						sty.FontWeight = s.FontWeight ?? sty.FontWeight;
 						sty.FontItalic = s.FontStyle == FontStyle.Italic;
 						sty.FontVariantNumeric = s.FontVariantNumeric ?? sty.FontVariantNumeric;
@@ -537,7 +591,11 @@ internal sealed class TextBlock : IDisposable
 		BlockSize = new Vector2( width, height );
 		IsTruncated = Block.Truncated;
 
-		var marginEdge = EffectMargin.EdgeSize;
+		// Ink that reaches past the measured rect (italic tails, accents, tight bearings) needs room too
+		var overhang = Block.MeasuredOverhang;
+		TextureMargin = EffectMargin + new Margin( MathF.Ceiling( overhang.Left ), MathF.Ceiling( overhang.Top ), MathF.Ceiling( overhang.Right ), MathF.Ceiling( overhang.Bottom ) );
+
+		var marginEdge = TextureMargin.EdgeSize;
 		width += marginEdge.x.CeilToInt();
 		height += marginEdge.y.CeilToInt();
 
@@ -553,7 +611,15 @@ internal sealed class TextBlock : IDisposable
 
 		using var perfScope = Performance.Scope( "TextBlock.RebuildTexture" );
 
-		using ( var bitmap = new SKBitmap( width, height, SKColorType.Bgra8888, SKAlphaType.Premul ) )
+		// Straight alpha, like every other texture. Skia's raster pipeline blends into an unpremultiplied
+		// target fine, and over a transparent clear the result is exact.
+		//
+		// HDR colours (any channel > 1) go to an extended-range half float surface — RgbaF16 (not RgbaF16Clamped)
+		// is the one Skia leaves unclamped — so the values reach the shader intact. Everything else stays 8-bit.
+		var colorType = IsHdr ? SKColorType.RgbaF16 : SKColorType.Bgra8888;
+		var imageFormat = IsHdr ? ImageFormat.RGBA16161616F : ImageFormat.BGRA8888;
+
+		using ( var bitmap = new SKBitmap( width, height, colorType, SKAlphaType.Unpremul ) )
 		using ( var canvas = new SKCanvas( bitmap ) )
 		{
 			var o = new Topten.RichTextKit.TextPaintOptions
@@ -568,15 +634,15 @@ internal sealed class TextBlock : IDisposable
 				TextGradient = Gradient
 			};
 
-			canvas.Clear( Style.TextColor.WithAlpha( 0 ) );
-
 			if ( ShouldDrawSelection && (SelectionStart > 0 || SelectionEnd > 0) )
 			{
 				o.Selection = new TextRange( CaretToCodePointIndex( SelectionStart ), CaretToCodePointIndex( SelectionEnd ) );
 				o.SelectionColor = SelectionColor.ToSk();
 			}
 
-			Block.Paint( canvas, new SKPoint( EffectMargin.Left - Block.MeasuredPadding.Left, EffectMargin.Top ), o );
+			Block.Paint( canvas, new SKPoint( TextureMargin.Left - Block.MeasuredPadding.Left, TextureMargin.Top ), o );
+
+			bitmap.RepairTransparentTexels( Style.TextColor );
 
 			var debugName = Text;
 			if ( debugName.Length > 10 ) debugName = $"{debugName.Substring( 0, 8 )}..";
@@ -589,8 +655,8 @@ internal sealed class TextBlock : IDisposable
 
 			if ( LastTexture != null )
 			{
-				// we already have a texture that is the right size, lets just use that
-				if ( LastTexture.Size == new Vector2( width, height ) )
+				// we already have a texture that is the right size and format, lets just use that
+				if ( LastTexture.Size == new Vector2( width, height ) && LastTexture.ImageFormat == imageFormat )
 				{
 					var span = new Span<byte>( bitmap.GetPixels().ToPointer(), width * height * bitmap.BytesPerPixel );
 					LastTexture.Update( span, 0, 0, width, height );
@@ -604,7 +670,7 @@ internal sealed class TextBlock : IDisposable
 				LastTexture = null;
 			}
 
-			Texture = Texture.Create( width, height, ImageFormat.BGRA8888 )
+			Texture = Texture.Create( width, height, imageFormat )
 									.WithName( $"skiatextblock[{debugName}]" )
 									.WithMips( numMips )
 									.WithData( bitmap.GetPixels(), width * height * bitmap.BytesPerPixel )
@@ -677,17 +743,29 @@ internal sealed class TextBlock : IDisposable
 		return 1.0f;
 	}
 
+	/// <summary>
+	/// How wide the drawn caret is, which has to fit on screen along with the glyph it sits against.
+	/// </summary>
+	const float CaretWidth = 2.0f;
+
+	/// <summary>
+	/// Move the scroll offset so the caret is inside the visible bounds, and never past the
+	/// ends of the text.
+	/// </summary>
 	internal void ScrollToCaret( int caretPosition, ref Vector2 scroll, Vector2 visibleBounds )
 	{
-		Rect caretRect = CaretRect( caretPosition - 1 );
+		if ( visibleBounds.x <= 0 || visibleBounds.y <= 0 )
+			return;
+
+		Rect caretRect = CaretRect( caretPosition );
 
 		if ( caretRect.Left < scroll.x )
 		{
 			scroll.x = caretRect.Left;
 		}
-		else if ( caretRect.Right > scroll.x + visibleBounds.x )
+		else if ( caretRect.Left + CaretWidth > scroll.x + visibleBounds.x )
 		{
-			scroll.x = caretRect.Right - visibleBounds.x + caretRect.Width;
+			scroll.x = caretRect.Left + CaretWidth - visibleBounds.x;
 		}
 
 		if ( caretRect.Top < scroll.y )
@@ -696,8 +774,28 @@ internal sealed class TextBlock : IDisposable
 		}
 		else if ( caretRect.Bottom > scroll.y + visibleBounds.y )
 		{
-			scroll.y = caretRect.Bottom - visibleBounds.y + caretRect.Height;
+			scroll.y = caretRect.Bottom - visibleBounds.y;
 		}
+
+		ClampScroll( ref scroll, visibleBounds );
+	}
+
+	/// <summary>
+	/// Keep the scroll offset inside the text. Editing can leave it pointing past the end -
+	/// deleting the second half of a line the entry was scrolled into, say.
+	/// </summary>
+	internal void ClampScroll( ref Vector2 scroll, Vector2 visibleBounds )
+	{
+		if ( visibleBounds.x <= 0 || visibleBounds.y <= 0 )
+			return;
+
+		if ( Block is null )
+			return;
+
+		// The measured size, not BlockSize - that one is a side effect of building the texture,
+		// and scrolling can't wait on a render to know how big the text is
+		scroll.x = Math.Clamp( scroll.x, 0, Math.Max( 0, Block.MeasuredWidth + CaretWidth - visibleBounds.x ) );
+		scroll.y = Math.Clamp( scroll.y, 0, Math.Max( 0, Block.MeasuredHeight - visibleBounds.y ) );
 	}
 
 	public void Dispose()

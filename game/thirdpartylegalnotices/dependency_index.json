@@ -342,6 +342,21 @@
 			]
 		},
 		{
+			"Name": "Slang",
+			"Comment": "Shading language & compiler; compiles our HLSL shaders to SPIR-V.",
+			"UsedBy": [
+				"vfx_vulkan"
+			],
+			"License": "Apache-2.0-with-LLVM-Exception",
+			"ProjectUrl": "https://github.com/shader-slang/slang",
+			"Linkage": "dynamic",
+			"Copyright": [
+				"NVIDIA Corporation & Affiliates",
+				"The Khronos Group Inc.",
+				"Slang contributors"
+			]
+		},
+		{
 			"Name": "embree",
 			"Comment": "Intel Embree ray tracing kernels (embree3 for vrad3; embree4 via steamaudio).",
 			"UsedBy": [
@@ -350,7 +365,7 @@
 			],
 			"License": "Apache-2.0",
 			"ProjectUrl": "https://github.com/embree/embree/",
-			"Linkage": "dynamic",
+			"Linkage": "static",
 			"Copyright": [
 				"2009-2024 Intel Corporation"
 			]
@@ -366,19 +381,6 @@
 			"Linkage": "static",
 			"Copyright": [
 				"2015 Etc2Comp Authors"
-			]
-		},
-		{
-			"Name": "fossilize",
-			"Comment": "Vulkan pipeline/shader cache management (Valve).",
-			"UsedBy": [
-				"engine2"
-			],
-			"License": "MIT",
-			"ProjectUrl": "https://github.com/ValveSoftware/Fossilize/",
-			"Linkage": "static",
-			"Copyright": [
-				"2018 Hans-Kristian Arntzen"
 			]
 		},
 		{
@@ -459,6 +461,21 @@
 			"Linkage": "dynamic",
 			"Copyright": [
 				"1997-2025 Sam Lantinga"
+			]
+		},
+		{
+			"Name": "glslang",
+			"Comment": "Khronos reference GLSL/HLSL front end; we build it to obtain SPVRemapper and the SPIR-V tooling libraries.",
+			"UsedBy": [
+				"shaderpreprocessing"
+			],
+			"License": "glslang",
+			"ProjectUrl": "https://github.com/KhronosGroup/glslang",
+			"Linkage": "static",
+			"Copyright": [
+				"2002-2024 The Khronos Group Inc.",
+				"2012-2016 LunarG, Inc.",
+				"2013-2016 Google, Inc."
 			]
 		},
 		{
@@ -764,7 +781,7 @@
 		},
 		{
 			"Name": "LAME",
-			"Comment": "LAME MP3 encoder (lame_enc.dll).",
+			"Comment": "LAME MP3 encoder (libmp3lame).",
 			"UsedBy": [
 				"soundssystem"
 			],
@@ -811,19 +828,6 @@
 			]
 		},
 		{
-			"Name": "OpenVR",
-			"Comment": "OpenVR runtime API (openvr_api.dll).",
-			"UsedBy": [
-				"engine2"
-			],
-			"License": "BSD-3-Clause",
-			"ProjectUrl": "https://github.com/ValveSoftware/openvr/",
-			"Linkage": "dynamic",
-			"Copyright": [
-				"2015 Valve Corporation"
-			]
-		},
-		{
 			"Name": "OpenXR",
 			"Comment": "Khronos OpenXR runtime loader (openxr_loader.dll).",
 			"UsedBy": [
@@ -863,16 +867,16 @@
 			]
 		},
 		{
-			"Name": "ToolWindowManager",
-			"Comment": "ToolWindowManager is a Qt based tool window manager. This allows Qt projects to use docking functionality similar to QDockWidget, but since it's a separate component it's easier to customise and extend and so has a number of improvements over the built-in docking system.",
+			"Name": "Qt Advanced Docking System",
+			"Comment": "Qt Advanced Docking System lets you create customizable layouts using a full featured window docking system similar to what is found in many popular integrated development environments (IDEs) such as Visual Studio.",
 			"UsedBy": [
 				"toolframework2"
 			],
-			"License": "MIT",
-			"ProjectUrl": "https://github.com/baldurk/toolwindowmanager",
-			"Linkage": "static",
+			"License": "LGPL-2.1",
+			"ProjectUrl": "https://github.com/githubuser0xFFFF/Qt-Advanced-Docking-System",
+			"Linkage": "dynamic",
 			"Copyright": [
-				"2014 Pavel Strakhov"
+				"2017 Uwe Kindler"
 			]
 		},
 		{

@@ -106,6 +106,12 @@ public partial class Panel : IPanel, IValid, IComponent
 	public bool HasOutro => (PseudoClass & PseudoClass.Outro) != 0;
 
 
+	/// <summary>
+	/// The UI system this panel belongs to. Asked of our parent, and answered by the root - a panel
+	/// that hasn't been added to anything yet says the game's, which is where an orphan would end up.
+	/// </summary>
+	internal virtual UISystem UISystem => Parent?.UISystem ?? Sandbox.Engine.GlobalContext.Current.UISystem;
+
 	public Panel()
 	{
 		InitializeEvents();
@@ -307,7 +313,7 @@ public partial class Panel : IPanel, IValid, IComponent
 
 		try
 		{
-			UpdateSceneIndex();
+			UpdateSceneIndexFromParent();
 
 			if ( ParentHasChanged )
 			{
@@ -344,11 +350,16 @@ public partial class Panel : IPanel, IValid, IComponent
 			UpdateBeforeAfterElements();
 
 			//
-			// If our style is dirty, or we're animating/transitioning/scrolling then make sure we get layed out
+			// If our style is dirty, or we're animating/transitioning then make sure we get layed out
 			//
-			if ( Style is not null && (Style.IsDirty || HasActiveTransitions || (ComputedStyle?.IsAnimationActive ?? false) || ScrollVelocity != 0 || isScrolling || IsDragScrolling) )
+			if ( Style is not null && (Style.IsDirty || HasActiveTransitions || (ComputedStyle?.IsAnimationActive ?? false)) )
 			{
 				SetNeedsPreLayout();
+			}
+			else if ( ScrollVelocity != 0 || isScrolling || IsDragScrolling )
+			{
+				// Scrolling only moves children - reapply offsets, skip the style rebuild
+				SetNeedsFinalLayout();
 			}
 
 			//
@@ -428,9 +439,9 @@ public partial class Panel : IPanel, IValid, IComponent
 	{
 		var screenPos = new Vector2( pos.x + Box.Rect.Left, pos.y + Box.Rect.Top );
 
-		if ( GlobalMatrix.HasValue )
+		if ( GlobalMatrixInverted.HasValue )
 		{
-			screenPos = GlobalMatrix.Value.Inverted.Transform( screenPos );
+			screenPos = GlobalMatrixInverted.Value.Transform( screenPos );
 		}
 
 		return screenPos;

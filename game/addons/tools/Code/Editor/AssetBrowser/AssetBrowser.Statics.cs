@@ -10,9 +10,13 @@ public partial class AssetBrowser
 		WrappedAssetBrowser browser;
 
 		// 1. try to find one for the current focused window
-		if ( Application.FocusWidget?.GetWindow() is DockWindow dockable )
+		if ( Application.FocusWidget is { } focused )
 		{
-			browser = dockable.DockManager.GetDockWidget( "Asset Browser" ) as WrappedAssetBrowser;
+			var manager = focused.GetWindow() is DockWindow dockable
+				? dockable.DockManager
+				: EditorWindow?.DockManager;
+
+			browser = manager?.FindDockWidget( focused )?.Widget as WrappedAssetBrowser;
 			if ( browser.IsValid() ) return browser;
 		}
 
@@ -31,7 +35,8 @@ public partial class AssetBrowser
 		if ( Get() is { } browser )
 			return browser;
 
-		return EditorWindow.DockManager.Create<MainAssetBrowser>();
+		EditorWindow.DockManager.SetDockState( "Asset Browser", true );
+		return MainAssetBrowser.Instance;
 	}
 
 	/// <summary>
@@ -42,6 +47,8 @@ public partial class AssetBrowser
 	public static void OpenTo( Asset asset, bool skipEvents = false )
 	{
 		var wrapped = GetOrCreate();
+		if ( wrapped is null ) return;
+
 		EditorWindow.DockManager.RaiseDock( wrapped );
 
 		var browser = wrapped.GetBrowser( asset );
@@ -64,6 +71,8 @@ public partial class AssetBrowser
 		}
 
 		var wrapped = GetOrCreate();
+		if ( wrapped is null ) return;
+
 		EditorWindow.DockManager.RaiseDock( wrapped );
 
 		var browser = wrapped.GetBrowser( entry );
